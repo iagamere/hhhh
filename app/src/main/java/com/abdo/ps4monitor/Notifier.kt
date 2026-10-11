@@ -412,8 +412,14 @@ object Notifier {
         return b.build()
     }
 
+    /**
+     * false = RemoteViews card (cover-coloured card, real ProgressBar, all download info). The media-session card (true) was tried on ColorOS:
+     * the system replaced it with its own grey media player (no cover colour, stuck 00:00 / 01:40 bar, no size / speed), so it is OFF by default.
+     */
+    private const val USE_MEDIA_SESSION = false
+
     private fun card(d: Download): Notification =
-        try { mediaCard(d) } catch (e: Exception) { releaseSession(d.notificationId); customCard(d) }
+        if (USE_MEDIA_SESSION) try { mediaCard(d) } catch (e: Exception) { releaseSession(d.notificationId); customCard(d) } else customCard(d)
 
     private fun cardSig(d: Download) =
         "${d.state}:${d.pct}:${d.currentSize shr 26}:${(d.speed / 262144).toInt()}:${d.etaSec / 20}:${d.iconReady}:${d.pkgTitle}:${confirming(d.id)}:${Lang.isAr}"
