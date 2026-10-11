@@ -21,7 +21,6 @@ import android.util.LruCache
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.ColorUtils
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.util.concurrent.ConcurrentHashMap
@@ -97,7 +96,7 @@ object Notifier {
         // colour: the downloading card if there is one. Colourized only for a single download (with several, one colour would be arbitrary).
         val lead = act.firstOrNull { it.state == DlState.DOWNLOADING } ?: act.first()
         val pal = palette(lead)
-        b.setColor(if (act.size == 1) pal.surface else pal.accent)
+        b.setColor(if (act.size == 1) pal.surface else pal.accentText)
         if (act.size == 1) b.setColorized(true)       // honoured here because this notification is the foreground-service one
         return b.setContentText(line).build()
     }
@@ -180,11 +179,7 @@ object Notifier {
         Color.HSVToColor(floatArrayOf(((d.displayName.hashCode() and 0x7fffffff) % 360).toFloat(), 0.55f, 0.55f))
 
     /** Colours of this download's card (cover colour, cached in [CoverColor]; no bitmap is decoded again for an already known cover). */
-    private fun palette(d: Download): CoverColor.Palette = CoverColor.palette(CoverColor.forDownload(d) ?: fallbackColor(d))
-
-    private const val ON_SURFACE = -0x1                     // 0xFFFFFFFF
-    private const val ON_SURFACE_VAR = 0xB3FFFFFF.toInt()   // 70 % white
-    private const val WARN = 0xFFFFB74D.toInt()             // amber: "confirm delete"
+    private fun palette(d: Download): Palette = CoverColor.palette(d, fallbackColor(d), Build.VERSION.SDK_INT >= 31)
 
     private class CardText(val pct: String?, val size: String, val left: String, val speed: String?, val sub: String) {
         /** one line for the collapsed card (and the plain content text) */
@@ -223,8 +218,8 @@ object Notifier {
     private val coverCache = LruCache<String, Bitmap>(16)
     private const val COVER_PX = 128
 
-    private fun coverBitmap(d: Download, pal: CoverColor.Palette): Bitmap {
-        val key = "${d.id}:${d.iconReady}"
+    private fun coverBitmap(d: Download, pal: Palette): Bitmap {
+        val key = "${d.id}:${d.iconReady}:${d.titleId}"
         coverCache.get(key)?.let { return it }
         val src = cover(d)
         val out = Bitmap.createBitmap(COVER_PX, COVER_PX, Bitmap.Config.ARGB_8888)
@@ -238,20 +233,20 @@ object Notifier {
             c.drawBitmap(src, Rect((src.width - s) / 2, (src.height - s) / 2, (src.width + s) / 2, (src.height + s) / 2), Rect(0, 0, COVER_PX, COVER_PX), p)
         } else {
             // missing / unreadable cover: a tinted tile with the download glyph
-            p.color = pal.button; c.drawRoundRect(all, r, r, p)
+            p.color = pal.container; c.drawRoundRect(all, r, r, p)
             ContextCompat.getDrawable(ctx, R.drawable.ic_download)?.mutate()?.let { g ->
                 val m = COVER_PX / 4
-                g.setBounds(m, m, COVER_PX - m, COVER_PX - m); g.setTint(pal.accent); g.draw(c)
+                g.setBounds(m, m, COVER_PX - m, COVER_PX - m); g.setTint(pal.accentText); g.draw(c)
             }
         }
         // cached per download; the key changes when iconReady flips, so a placeholder is replaced by the real cover
         coverCache.put(key, out)
         return out
     }
-    fun forgetCover(id: String) { coverCache.remove("$id:true"); coverCache.remove("$id:false") }
+    fun forgetCover(id: String) { coverCache.snapshot().keys.filter { it.startsWith("$id:") }.forEach { coverCache.remove(it) } }
 
     /** Fill and track of the real ProgressBar in the cover colour. See res/drawable/notif_progress.xml for what happens below Android 12. */
-    private fun styleBar(rv: RemoteViews, d: Download, pal: CoverColor.Palette) {
+    private fun styleBar(rv: RemoteViews, d: Download, pal: Palette) {
         val indeterminate = d.frac == null && d.state == DlState.DOWNLOADING      // total size not known yet
         rv.setProgressBar(R.id.bar, 1000, ((d.frac ?: 0f) * 1000f).toInt().coerceIn(0, 1000), indeterminate)
         if (Build.VERSION.SDK_INT >= 31) {      // RemoteViews.setColorStateList: API 31. ProgressBar.setProgressTintList & co. are @RemotableViewMethod.
@@ -262,52 +257,55 @@ object Notifier {
         }
     }
 
-    private fun collapsedView(d: Download, pal: CoverColor.Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
+    private fun collapsedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
         val rv = RemoteViews(ctx.packageName, R.layout.notif_dl_collapsed)
         rv.setInt(R.id.bg, "setColorFilter", pal.surface)
         rv.setImageViewBitmap(R.id.cover, coverBitmap(d, pal))
-        rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, ON_SURFACE)
+        rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, pal.onSurface)
         rv.setTextViewText(R.id.stats, if (confirm) tr("Tap again to delete download + file", "اضغط مرة أخرى لحذف التحميل وملفه") else t.line)
-        rv.setTextColor(R.id.stats, if (confirm) WARN else ON_SURFACE_VAR)
+        rv.setTextColor(R.id.stats, if (confirm) pal.warn else pal.onSurfaceVariant)
         styleBar(rv, d, pal)
         val toggle = if (paused) tr("Resume", "استئناف") else tr("Pause", "إيقاف مؤقت")
         val del = if (confirm) tr("Confirm delete", "تأكيد الحذف") else tr("Delete", "حذف")
         rv.setImageViewResource(R.id.ib_toggle, if (paused) R.drawable.ic_play else R.drawable.ic_pause)
-        rv.setInt(R.id.ib_toggle, "setColorFilter", ON_SURFACE)
+        rv.setInt(R.id.ib_toggle, "setColorFilter", pal.onSurface)
         rv.setContentDescription(R.id.ib_toggle, toggle)
         rv.setOnClickPendingIntent(R.id.ib_toggle, actionPi(if (paused) ACT_RESUME else ACT_PAUSE, d))
         rv.setImageViewResource(R.id.ib_delete, if (confirm) R.drawable.ic_warning else R.drawable.ic_delete)
-        rv.setInt(R.id.ib_delete, "setColorFilter", if (confirm) WARN else ON_SURFACE_VAR)
+        rv.setInt(R.id.ib_delete, "setColorFilter", if (confirm) pal.warn else pal.onSurfaceVariant)
         rv.setContentDescription(R.id.ib_delete, del)
         rv.setOnClickPendingIntent(R.id.ib_delete, actionPi(ACT_DELETE, d))
         return rv
     }
 
-    private fun expandedView(d: Download, pal: CoverColor.Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
+    private fun expandedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
         val rv = RemoteViews(ctx.packageName, R.layout.notif_dl_expanded)
         rv.setInt(R.id.bg, "setColorFilter", pal.surface)
         rv.setImageViewBitmap(R.id.cover, coverBitmap(d, pal))
-        rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, ON_SURFACE)
+        rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, pal.onSurface)
+        rv.setTextColor(R.id.state, pal.onSurfaceVariant)
         rv.setTextViewText(R.id.state, listOfNotNull(psName(d).ifEmpty { null }, if (d.state == DlState.DOWNLOADING) tr("Downloading", "جارٍ التحميل") else if (paused) tr("Paused", "متوقف مؤقتًا") else d.state.label).joinToString(" • "))
         styleBar(rv, d, pal)
         rv.setViewVisibility(R.id.pct, if (t.pct != null) View.VISIBLE else View.GONE)
-        rv.setTextViewText(R.id.pct, t.pct ?: ""); rv.setTextColor(R.id.pct, pal.accent)
-        rv.setTextViewText(R.id.size, t.size)
-        rv.setTextViewText(R.id.left, t.left)
-        rv.setTextViewText(R.id.speed, t.speed ?: "")
+        rv.setTextViewText(R.id.pct, t.pct ?: ""); rv.setTextColor(R.id.pct, pal.accentText)
+        rv.setTextViewText(R.id.size, t.size); rv.setTextColor(R.id.size, pal.onSurfaceVariant)
+        rv.setTextViewText(R.id.left, t.left); rv.setTextColor(R.id.left, pal.onSurfaceVariant)
+        rv.setTextViewText(R.id.speed, t.speed ?: ""); rv.setTextColor(R.id.speed, pal.tertiary)
         rv.setViewVisibility(R.id.hint, if (confirm) View.VISIBLE else View.GONE)
+        rv.setTextColor(R.id.hint, pal.warn)
         if (confirm) rv.setTextViewText(R.id.hint, tr("Tap the bin again to delete this download and its file", "اضغط سلة المهملات مرة أخرى لحذف التحميل وملفه"))
         // buttons
-        rv.setInt(R.id.btn_toggle_bg, "setColorFilter", pal.button)
+        rv.setInt(R.id.btn_toggle_bg, "setColorFilter", pal.container)
         rv.setImageViewResource(R.id.btn_toggle_icon, if (paused) R.drawable.ic_play else R.drawable.ic_pause)
-        rv.setInt(R.id.btn_toggle_icon, "setColorFilter", ON_SURFACE)
+        rv.setInt(R.id.btn_toggle_icon, "setColorFilter", pal.onContainer)
+        rv.setTextColor(R.id.btn_toggle_label, pal.onContainer)
         rv.setTextViewText(R.id.btn_toggle_label, if (paused) tr("Resume", "استئناف") else tr("Pause", "إيقاف مؤقت"))
         rv.setOnClickPendingIntent(R.id.btn_toggle, actionPi(if (paused) ACT_RESUME else ACT_PAUSE, d))
-        rv.setInt(R.id.btn_delete_bg, "setColorFilter", if (confirm) ColorUtils.setAlphaComponent(WARN, 0x40) else pal.button)
+        rv.setInt(R.id.btn_delete_bg, "setColorFilter", if (confirm) ColorMath.withAlpha(pal.warn, 0x33) else pal.container)
         rv.setImageViewResource(R.id.btn_delete_icon, if (confirm) R.drawable.ic_warning else R.drawable.ic_delete)
-        rv.setInt(R.id.btn_delete_icon, "setColorFilter", if (confirm) WARN else ON_SURFACE)
+        rv.setInt(R.id.btn_delete_icon, "setColorFilter", if (confirm) pal.warn else pal.onContainer)
         rv.setTextViewText(R.id.btn_delete_label, if (confirm) tr("Confirm delete", "تأكيد الحذف") else tr("Delete", "حذف"))
-        rv.setTextColor(R.id.btn_delete_label, if (confirm) WARN else ON_SURFACE)
+        rv.setTextColor(R.id.btn_delete_label, if (confirm) pal.warn else pal.onContainer)
         rv.setOnClickPendingIntent(R.id.btn_delete, actionPi(ACT_DELETE, d))
         return rv
     }
@@ -322,7 +320,7 @@ object Notifier {
             // plain title / text: not drawn (the custom views are), but used by accessibility, the lock screen and watches
             .setContentTitle(gameTitle(d)).setContentText(t.line).setSubText(t.sub.ifEmpty { null })
             .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())
-            .setColor(pal.accent)       // tints the small icon / app name in the header; the background itself is not ours to colour
+            .setColor(pal.accentText)       // tints the small icon / app name in the header; the background itself is not ours to colour
             .setStyle(Notification.DecoratedCustomViewStyle())
             .setCustomContentView(collapsedView(d, pal, t, paused, confirm))
             .setCustomBigContentView(expandedView(d, pal, t, paused, confirm))

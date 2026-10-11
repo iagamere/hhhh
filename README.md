@@ -30,6 +30,11 @@ artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop m
   media notifications with a MediaSession. The card was neither, so System UI drew its normal grey surface. The colour is now inside the card.
 - **Foreground-service notification (id 1):** shows overall progress as the system's own tinted progress bar, and is colourized (the one place Android
   allows it) while exactly one download is active.
+- **Coordinated palette (`CoverPalette.kt`, pure Kotlin, JVM-testable):** from the cover it derives surface, title colour, secondary text, progress fill,
+  percentage colour, speed colour (the cover's second colour when it has one), empty track, button container, warning colour. Light covers
+  (yellow, cyan, lime) get a light surface with dark text, others a dark surface with light text; mostly-black covers get a quiet, desaturated palette.
+  Contrast: title >= 7:1, other text >= 4.5:1, bar fill >= 3:1. Light surfaces only on Android 12+ (the bar cannot be tinted below that).
+  The analysis is cached per download and recomputed when the cover changes (signature: iconReady / titleId / title).
 - Hue binning in `CoverColor.dominant` is now centred on 0 degrees, so red covers are no longer split into two half-weight bins.
 - NOT compiled here either (no Android SDK): see the notes in the change report.
 
