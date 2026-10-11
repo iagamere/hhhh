@@ -50,6 +50,7 @@ object Notifier {
     private val alerted = ConcurrentHashMap<Int, Long>()
     private const val ALERT_BASE = 500_000
     private const val SERVICE_CHANNEL = "monitor_hidden"
+    private const val DL_CHANNEL = "dl_v2"
     const val ACT_PAUSE = "com.abdo.ps4monitor.NOTIF_PAUSE"
     const val ACT_RESUME = "com.abdo.ps4monitor.NOTIF_RESUME"
     const val ACT_DELETE = "com.abdo.ps4monitor.NOTIF_DELETE"
@@ -62,7 +63,11 @@ object Notifier {
         val m = ctx.getSystemService(NotificationManager::class.java)
         runCatching { m.deleteNotificationChannel("active"); m.deleteNotificationChannel("results") }     // channels of the old version
         runCatching { m.deleteNotificationChannel("monitor") }     // channel of 4.2 (its notification was the big combined one)
-        m.createNotificationChannel(NotificationChannel("dl", tr("Downloads", "التحميلات"), NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        // Download cards: importance DEFAULT (not LOW), so they are NOT in the "Silent" section and show on the lock screen, but with no sound and no
+        // vibration, and (onlyAlertOnce) updates never alert. A channel's importance cannot be changed after creation, hence the new id "dl_v2".
+        runCatching { m.deleteNotificationChannel("dl") }                  // (fails while the old service uses it: harmless, it is just unused)
+        m.createNotificationChannel(NotificationChannel(DL_CHANNEL, tr("Downloads", "التحميلات"), NotificationManager.IMPORTANCE_DEFAULT).apply {
+            setShowBadge(false); setSound(null, null); enableVibration(false); lockscreenVisibility = Notification.VISIBILITY_PUBLIC })
         // The mandatory foreground-service notification lives on a channel that is created BLOCKED (IMPORTANCE_NONE): the service keeps running, but
         // the notification is not shown in the shade, so only the download cards remain. (The user can still enable it: Settings > Notifications.)
         runCatching { m.deleteNotificationChannel("monitor_min") }        // the visible channel of 4.3 (may fail while the old service is alive: harmless)
@@ -386,7 +391,7 @@ object Notifier {
         val confirm = confirming(d.id)
         val pal = palette(d)
         val t = cardTexts(d)
-        val b = Notification.Builder(ctx, "dl")
+        val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
             .setSmallIcon(R.drawable.ic_stat_ps4)
             // plain title / text: not drawn (the custom views are), but used by accessibility, the lock screen and watches
             .setContentTitle(gameTitle(d)).setContentText(t.line).setSubText(t.sub.ifEmpty { null })
@@ -454,7 +459,7 @@ object Notifier {
         val token = updateSession(d, cover(d) ?: art, paused, confirm)
         val text = if (confirm) tr("Tap the bin again to delete this download and its file", "اضغط سلة المهملات مرة أخرى لحذف التحميل وملفه")
                    else listOfNotNull(t.line, t.speed).joinToString(" • ")
-        val b = Notification.Builder(ctx, "dl")
+        val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
             .setSmallIcon(R.drawable.ic_stat_ps4)
             .setContentTitle(gameTitle(d)).setContentText(text).setSubText(t.sub.ifEmpty { null })
             .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())

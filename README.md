@@ -20,6 +20,10 @@ Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
 
 
+## 4.3 cards not silent, visible on the lock screen
+- Channel `dl_v2`: IMPORTANCE_DEFAULT with no sound / vibration (so the cards are out of the "Silent" section), lock-screen visibility PUBLIC.
+  The phone's own setting "show notifications on the lock screen" must also be on for this app.
+
 ## 4.3 one notification only
 - Android requires a notification for the monitoring service and ColorOS shows it even on a blocked channel, so the foreground notification is now the
   LEAD download's card (`Notifier.foregroundFor / syncForeground / handoff`, `MonitorService.promote`). There is no separate "PS4 Monitor" row while a
