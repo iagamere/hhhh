@@ -28,6 +28,8 @@ object Tx {
         "That is not a valid http(s) link." to "هذا ليس رابط http(s) صالحًا.",
         "This PS4 has no IP address yet." to "لا يوجد عنوان IP لهذا الـPS4.",
         "Download not found." to "التحميل غير موجود.",
+        "Downloads do not need ezRemote web with the custom server (the PS4 suspends ezRemote while a game runs). Files and covers do." to
+            "التحميل لا يحتاج ويب ezRemote مع الخادم المخصص (الـPS4 يعلّق ezRemote أثناء تشغيل لعبة). أما الملفات والأغلفة فتحتاجه.",
         "That PS4 profile no longer exists." to "ملف هذا الـPS4 لم يعد موجودًا.",
         "Retry is only available for failed or not-started downloads." to "إعادة المحاولة متاحة فقط للتحميلات الفاشلة أو التي لم تبدأ.",
         "ezRemote accepted the request but no download activity was detected." to "قبل ezRemote الطلب لكن لم يُكتشف أي نشاط تحميل.",

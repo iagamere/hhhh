@@ -136,6 +136,31 @@ object EzServer {
             else -> Ctl(false, j?.optString("error").orEmpty().ifBlank { "HTTP ${r.code}" })
         }
     } catch (e: Exception) { Ctl(false, EzRemote.friendly(e)) }
+    /**
+     * Queues a download directly on the custom server (POST /v2/add), WITHOUT ezRemote Client's web server (port 8080). The PS4 suspends ezRemote
+     * Client while a game runs, and its web server with it; the server is a payload and keeps answering. Same fields ezRemote Client would send:
+     * type 7 (file host), host = scheme://host[:port], src_path = path + query, dest_path = the final file path.
+     * Sending the same dest_path again replaces the link and continues (that is how an expired link is refreshed).
+     * Unreachable (not Rejected) is returned for anything that is not a plain http(s) link or when the server does not answer, so the caller can
+     * still try the old route.
+     */
+    fun add(ps4: Ps4, url: String, destPath: String): EzRemote.Submit {
+        val m = Regex("^(https?://[^/?#@]+)([^#]*)$", RegexOption.IGNORE_CASE).matchEntire(url.trim())
+            ?: return EzRemote.Submit.Unreachable("This link cannot be sent directly to the server.")
+        var path = m.groupValues[2]
+        if (path.isEmpty()) path = "/" else if (path.startsWith("?")) path = "/$path"
+        path = path.replace(" ", "%20")
+        val body = JSONObject().put("type", 7).put("url", m.groupValues[1]).put("src_path", path).put("dest_path", destPath).put("size", 0).toString()
+        return try {
+            val r = call(ps4, "POST", "/v2/add", body, 10_000)
+            val j = runCatching { JSONObject(r.body) }.getOrNull()
+            when {
+                r.code in 200..299 && j?.optBoolean("ok", true) != false -> EzRemote.Submit.Accepted
+                j != null && j.has("error") -> EzRemote.Submit.Rejected("ezRemote Server rejected the request: " + j.optString("error"))
+                else -> EzRemote.Submit.Rejected("ezRemote Server answered HTTP ${r.code}.")
+            }
+        } catch (e: Exception) { EzRemote.Submit.Unreachable(EzRemote.friendly(e)) }
+    }
     fun pause(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/pause", "{\"id\":$id}")
     fun resume(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/resume", "{\"id\":$id}")
     /** Cancels a running download without touching the others. deleteFiles: also the partial file (and the finished file of a finished one). */

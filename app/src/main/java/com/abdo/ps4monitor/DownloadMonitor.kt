@@ -94,13 +94,14 @@ object DownloadMonitor {
         if (retryOf == null) DownloadRepo.all.value.firstOrNull { it.ps4Id == ps4.id && it.sourceUrl == u && it.state.active && !it.superseded }
             ?.let { return@withContext SubmitResult.Duplicate("This link is already being downloaded to ${ps4.name}.") }
         val taken = HashSet<String>()
-        try { EzRemote.list(ps4, dest, 8000).forEach { taken += it.name } } catch (e: Exception) { }
+        val viaServer = try { EzServer.isV2(ps4, 3000) } catch (e: Exception) { false }
+        try { EzRemote.list(ps4, dest, if (viaServer) 2500 else 8000).forEach { taken += it.name } } catch (e: Exception) { }   // best effort: ezRemote web is off while a game runs
         try { EzServer.list(ps4, 3000).filter { parent(it.path) == dest }.forEach { taken += it.path.substringAfterLast('/') } } catch (e: Exception) { }
         val name = uniqueName(Names.clean(fileNameIn ?: Names.fromUrl(u)).ifBlank { "download.pkg" }, taken)
         val id = UUID.randomUUID().toString(); val now = System.currentTimeMillis()
         DownloadRepo.add(Download(id, ps4.id, u, name, dest, name, (retryOf?.attempt ?: 0) + 1, createdAt = now, submittedAt = now, notificationId = Store.nextNotifId()))
         d("Download request submitted (${ps4.name})")
-        when (val r = EzRemote.submit(ps4, u, joinPath(dest, name))) {
+        when (val r = sendLink(ps4, u, joinPath(dest, name))) {
             is EzRemote.Submit.Rejected -> { DownloadRepo.remove(id); d("State: rejected — ${r.message}"); SubmitResult.Rejected(r.message) }
             is EzRemote.Submit.Unreachable -> { DownloadRepo.remove(id); d("State: not sent — ${r.message}"); SubmitResult.Unreachable(r.message) }
             EzRemote.Submit.Accepted -> {
@@ -110,6 +111,21 @@ object DownloadMonitor {
                 SubmitResult.Accepted(id)
             }
         }
+    }
+
+    /**
+     * Sends a link to the PS4. With the custom server it goes straight to the server (port 6701), because ezRemote Client (and its web server on
+     * port 8080) is suspended by the PS4 while a game is running and the server is not. The original server (and any failure to reach the custom
+     * one) still goes through ezRemote Client's web server.
+     */
+    private fun sendLink(p: Ps4, url: String, path: String): EzRemote.Submit {
+        val v2 = try { EzServer.isV2(p, 4000) } catch (e: Exception) { false }
+        if (v2) {
+            val r = EzServer.add(p, url, path)
+            if (r !is EzRemote.Submit.Unreachable) { d("Link sent directly to ezRemote Server (/v2/add): ${if (r is EzRemote.Submit.Accepted) "accepted" else "rejected"}"); return r }
+            d("Direct send to ezRemote Server failed (${r.message}); trying ezRemote Client's web server")
+        }
+        return EzRemote.submit(p, url, path)
     }
 
     /** The server's live entry for [path] when the custom server (/v2 API) is running; null for an original server or when unreachable. */
@@ -122,7 +138,7 @@ object DownloadMonitor {
         val path = old.path ?: return@withContext null
         val live = v2Live(p, path) ?: return@withContext null
         if (live.done) return@withContext null
-        when (val r = EzRemote.submit(p, old.sourceUrl, path)) {
+        when (val r = sendLink(p, old.sourceUrl, path)) {
             is EzRemote.Submit.Rejected -> SubmitResult.Rejected(r.message)
             is EzRemote.Submit.Unreachable -> SubmitResult.Unreachable(r.message)
             EzRemote.Submit.Accepted -> {
@@ -141,7 +157,7 @@ object DownloadMonitor {
         if (d0.sourceUrl.isBlank() || rt.relinks >= 5) return false
         if (now - rt.lastRelink < 20_000L) { setState(d0, DlState.STALLED, "Refreshing the expired link…"); return true }
         rt.lastRelink = now
-        return when (EzRemote.submit(p, d0.sourceUrl, path)) {
+        return when (sendLink(p, d0.sourceUrl, path)) {
             EzRemote.Submit.Accepted -> {
                 rt.relinks++; rt.failSince = 0
                 setState(d0, DlState.QUEUED, "The link expired and was refreshed automatically (${rt.relinks}/5).")
@@ -217,7 +233,7 @@ object DownloadMonitor {
         if (e != null) {
             if (EzServer.sane(e.size)) setExpected(d0, e.size)
             when {
-                e.done -> verify(p, d0, rt)
+                e.done -> verify(p, d0, rt, e)
                 e.pending -> { rt.failSince = 0; setState(d0, DlState.QUEUED, if (e.v2) "Queued on the server." else "Queued in ezRemote Server (it downloads one file at a time).") }
                 e.paused -> { rt.failSince = 0; setState(d0, DlState.PAUSED, "Paused on the PS4 server.") }
                 e.needsLink -> {
@@ -282,9 +298,20 @@ object DownloadMonitor {
     }
 
     /** The server says SUCCESS. It also "succeeds" when the host answered with an error page, so the file itself is checked. */
-    private fun verify(p: Ps4, d0: Download, rt: Rt) {
+    private fun verify(p: Ps4, d0: Download, rt: Rt, e: SrvEntry? = null) {
         val path = d0.path ?: return
-        val size = try { EzRemote.fileSize(p, path, 5000) } catch (x: Exception) { setState(d0, DlState.VERIFYING, "Checking downloaded file…"); return }
+        val size = try { EzRemote.fileSize(p, path, 5000) } catch (x: Exception) {
+            // ezRemote Client's web server does not answer (the PS4 suspends it while a game runs). The custom server has already checked the file
+            // itself (HTTP status, not a web page, final size), so its own report is enough; with the original server we keep waiting for the web server.
+            val sz = if (e != null && e.v2 && e.done) maxOf(e.bytes, e.size) else 0L
+            if (sz > 0 && EzServer.sane(sz)) {
+                DownloadRepo.update(d0.id) { it.copy(currentSize = sz) }
+                setState(d0, DlState.COMPLETED, "")
+                d("${d0.displayName}: completed (${Fmt.bytes(sz)}), verified by the server; ezRemote web is not reachable")
+                return
+            }
+            setState(d0, DlState.VERIFYING, "Checking downloaded file…"); return
+        }
         if (size <= 0) {
             rt.absent++
             val tmp = try { EzRemote.fileSize(p, "$path.tmp", 5000) } catch (x: Exception) { 0L }
@@ -439,6 +466,7 @@ object DownloadMonitor {
         var webOk = false; var srv: List<SrvEntry>? = null
         try { EzRemote.list(p, norm(p.dest), s.timeout * 1000); webOk = true; parts += "ezRemote web: OK" } catch (e: Exception) { d("Probe web: ${e.javaClass.simpleName}: ${e.message}"); parts += "ezRemote web: " + EzRemote.friendly(e) }
         try { srv = EzServer.list(p, 4000); parts += "ezRemote Server: OK" + if (EzServer.isV2Known(p)) " (custom build, /v2)" else "" } catch (e: Exception) { d("Probe server: ${e.javaClass.simpleName}"); parts += "ezRemote Server: not reachable (is it running? port 6701)" }
+        if (!webOk && srv != null && EzServer.isV2Known(p)) parts += "Downloads do not need ezRemote web with the custom server (the PS4 suspends ezRemote while a game runs). Files and covers do."
         upStatus(p.id) { it.copy(web = if (webOk) Link.AVAILABLE else Link.UNAVAILABLE, bg = if (srv != null) Link.AVAILABLE else Link.UNAVAILABLE) }
         val hist = if (webOk) try { BgHistory.read(p) } catch (e: Exception) { null } else null
         adopt(p, srv, hist)

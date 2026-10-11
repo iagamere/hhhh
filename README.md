@@ -1,4 +1,4 @@
-# PS4 Download Monitor 4.3
+# PS4 Download Monitor 4.4
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 
@@ -59,6 +59,16 @@ artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop m
   The analysis is cached per download and recomputed when the cover changes (signature: iconReady / titleId / title).
 - Hue binning in `CoverColor.dominant` is now centred on 0 degrees, so red covers are no longer split into two half-weight bins.
 - NOT compiled here either (no Android SDK): see the notes in the change report.
+
+## 4.4 (downloads while a game is running)
+- **Links are sent straight to ezRemote Server** (port 6701, `POST /v2/add`) when the custom server is running. Before, every download went through
+  ezRemote Client's web server (port 8080); the PS4 suspends ezRemote Client while a game runs, so nothing could be added. The server is a payload and
+  keeps answering. The original server, or a failure to reach the custom one, still uses the old route (8080).
+- A finished download is **verified by the server's own report** when ezRemote web is not reachable (it already checks the HTTP status, that it is not a
+  web page, and the final size), instead of waiting in "Checking downloaded file" until ezRemote is opened again.
+- The home screen explains that "ezRemote web: unavailable" is normal while a game runs. Still needs ezRemote web: the Files tab, game covers/names
+  of new downloads, and picking a free file name (while it is off, a new download with the same name as an existing file on the PS4 is not detected).
+- NOT compiled by the author (no Android SDK here).
 
 ## 4.3 (music-player style notifications)
 - **One card per download** (active or paused), styled like a music player: media-style notification tinted with the game's cover colour, the cover as
