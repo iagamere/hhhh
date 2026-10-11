@@ -267,8 +267,8 @@ object Notifier {
         }
     }
 
-    private fun collapsedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.notif_dl_collapsed)
+    private fun collapsedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean, fb: Boolean): RemoteViews {
+        val rv = RemoteViews(ctx.packageName, if (fb) R.layout.notif_dl_collapsed_fb else R.layout.notif_dl_collapsed)
         rv.setInt(R.id.bg, "setColorFilter", pal.surface)
         rv.setImageViewBitmap(R.id.cover, coverBitmap(d, pal))
         rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, pal.onSurface)
@@ -288,8 +288,13 @@ object Notifier {
         return rv
     }
 
-    private fun expandedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.notif_dl_expanded)
+    private fun expandedView(d: Download, pal: Palette, t: CardText, paused: Boolean, confirm: Boolean, fb: Boolean): RemoteViews {
+        val rv = RemoteViews(ctx.packageName, if (fb) R.layout.notif_dl_expanded_fb else R.layout.notif_dl_expanded)
+        if (fb) {      // the system draws no header around a full-bleed notification: draw our own
+            rv.setInt(R.id.app_glyph, "setColorFilter", pal.accentText)
+            rv.setTextColor(R.id.app_name, pal.onSurfaceVariant)
+            rv.setTextViewText(R.id.eta, t.sub); rv.setTextColor(R.id.eta, pal.onSurfaceVariant)
+        }
         rv.setInt(R.id.bg, "setColorFilter", pal.surface)
         rv.setImageViewBitmap(R.id.cover, coverBitmap(d, pal))
         rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, pal.onSurface)
@@ -321,6 +326,13 @@ object Notifier {
     }
 
     /** Fallback card (custom RemoteViews on the system's own grey surface), used when the media session cannot be created. */
+    /**
+     * true: no notification style -> the custom view IS the whole notification (no grey container, the cover-coloured surface runs edge to edge).
+     * Android only allows this for apps with targetSdk <= 30 (docs: apps targeting 31+ cannot create fully custom notifications, the system always
+     * wraps them in its standard template = the grey box), so app/build.gradle.kts has targetSdk = 30. false: DecoratedCustomViewStyle (grey box).
+     */
+    private const val FULL_BLEED = true
+
     private fun customCard(d: Download): Notification {
         val paused = d.state == DlState.PAUSED
         val confirm = confirming(d.id)
@@ -331,13 +343,12 @@ object Notifier {
             // plain title / text: not drawn (the custom views are), but used by accessibility, the lock screen and watches
             .setContentTitle(gameTitle(d)).setContentText(t.line).setSubText(t.sub.ifEmpty { null })
             .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())
-            .setColor(pal.accentText)       // tints the small icon / app name in the header; the background itself is not ours to colour
-            .setStyle(Notification.DecoratedCustomViewStyle())
-            .setCustomContentView(collapsedView(d, pal, t, paused, confirm))
-            .setCustomBigContentView(expandedView(d, pal, t, paused, confirm))
+            .setColor(pal.accentText)
+            .setCustomContentView(collapsedView(d, pal, t, paused, confirm, FULL_BLEED))
+            .setCustomBigContentView(expandedView(d, pal, t, paused, confirm, FULL_BLEED))
+        if (!FULL_BLEED) b.setStyle(Notification.DecoratedCustomViewStyle())
         return b.build()
     }
-
 
     // ---------------------------------------------------------------------------------------------
     // Media-style card (like Musicolet): the only kind of normal notification whose WHOLE background Android colours.

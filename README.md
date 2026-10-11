@@ -20,6 +20,13 @@ Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
 
 
+## 4.3 full-bleed cards (current): no grey box
+- Android docs: apps targeting 31+ cannot create fully custom notifications; the system wraps them in its standard template (the grey container).
+  With `targetSdk = 30` (compileSdk stays 34) a custom layout WITHOUT a style is the whole notification, so the cover-coloured surface runs edge to edge.
+  `Notifier.FULL_BLEED` (layouts `notif_dl_*_fb.xml`) switches it; false (+ targetSdk 34) gives the decorated card inside the grey box again.
+- The app draws its own header row (glyph, app name, time left) because the system draws none. The id-1 foreground notification stays a normal (grey) one.
+- Not verified on a device by the author; ColorOS may still wrap or group notifications of one app.
+
 ## 4.3 media-session cards (tried, OFF by default)
 - Tried a MediaSession notification to remove the grey container (`Notifier.mediaCard`, switch `USE_MEDIA_SESSION`). On ColorOS the system turned it into
   its own grey media player (no cover colour, no size / speed, bar stuck at 00:00 / 01:40), so the RemoteViews card (`customCard`) is the default again.
