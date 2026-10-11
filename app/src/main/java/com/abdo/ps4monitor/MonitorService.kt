@@ -21,6 +21,10 @@ class MonitorService : Service() {
         override fun onAvailable(n: Network) { DownloadMonitor.net.value = true; DownloadMonitor.kick() }
         override fun onLost(n: Network) { DownloadMonitor.net.value = false }
     }
+    /** (Re)attaches the service's foreground state to this notification. The previous foreground notification is removed by the system. */
+    fun promote(id: Int, n: android.app.Notification) {
+        runCatching { ServiceCompat.startForeground(this, id, n, if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0) }
+    }
     override fun onBind(i: Intent?): IBinder? = null
     override fun onStartCommand(i: Intent?, f: Int, s: Int): Int {
         DownloadMonitor.restore()                 // idempotent; re-attaches after Android restarted us
@@ -30,8 +34,10 @@ class MonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         Notifier.init(this)
-        ServiceCompat.startForeground(this, 1, Notifier.summary(this, tr("Starting…", "جارٍ البدء…")),
-            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0)
+        Notifier.attach(this)
+        // the foreground notification IS the lead download's card (no separate "PS4 Monitor" row); the quiet summary only when there is no card
+        val (fid, fn) = Notifier.foregroundFor(this, tr("Starting…", "جارٍ البدء…"))
+        promote(fid, fn); Notifier.onPromoted(fid)
         wl = (getSystemService(POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ps4monitor:poll").apply { acquire() }
         @Suppress("DEPRECATION")
         wf = (applicationContext.getSystemService(WIFI_SERVICE) as WifiManager).createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ps4monitor").apply { acquire() }
@@ -49,13 +55,13 @@ class MonitorService : Service() {
                     if (System.currentTimeMillis() - idleSince > 5000) { stopSelf(); return@launch }   // grace period for a download submitted right now
                 } else idleSince = 0L
                 val text = if (opsOn) Ops.label.value else tr("Monitoring $n download${if (n > 1) "s" else ""}", "مراقبة $n تحميل")
-                lastText = text; Notifier.refreshSummary(this@MonitorService, text); Notifier.refreshDownloads()
+                lastText = text; Notifier.refreshSummary(this@MonitorService, text); Notifier.refreshDownloads(); Notifier.syncForeground(text)
                 delay(3000)
             }
         }
     }
     override fun onDestroy() {
-        scope.cancel(); runCatching { cm?.unregisterNetworkCallback(cb) }
+        Notifier.detach(); scope.cancel(); runCatching { cm?.unregisterNetworkCallback(cb) }
         runCatching { wl?.release() }; runCatching { wf?.release() }
         super.onDestroy()
     }

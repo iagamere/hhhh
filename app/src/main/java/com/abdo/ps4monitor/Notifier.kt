@@ -109,8 +109,51 @@ object Notifier {
         if (act.size == 1) b.setColorized(true)       // honoured here because this notification is the foreground-service one
         return b.setContentText(line).build()
     }
+    // ---------------------------------------------------------------------------------------------
+    // Foreground state: Android requires a notification for the service and cannot hide it (it even ignores a blocked channel), so the foreground
+    // notification is the LEAD download's card. The quiet summary (id 1) is only used while there is no card to carry it.
+    // ---------------------------------------------------------------------------------------------
+    @Volatile var fgId = 1
+    @Volatile private var svc: MonitorService? = null
+    private var lastFallback = ""
+    fun attach(s: MonitorService) { svc = s }
+    fun detach() { svc = null; fgId = 1 }
+    fun onPromoted(id: Int) { fgId = id }
+
+    private fun leadDownload(excluding: String? = null): Download? {
+        if (!Store.settings().notif) return null
+        val l = DownloadRepo.all.value.filter { cardWanted(it) && it.id != excluding }
+        return l.firstOrNull { it.state != DlState.PAUSED } ?: l.firstOrNull()
+    }
+    private fun cardFor(d: Download): Pair<Int, Notification> { posted[d.notificationId] = cardSig(d); return d.notificationId to card(d) }
+
+    fun foregroundFor(c: Context, fallback: String): Pair<Int, Notification> {
+        lastFallback = fallback
+        val lead = leadDownload()
+        return if (lead != null) cardFor(lead) else 1 to summary(c, fallback)
+    }
+    /** Every service tick: if another download should carry the foreground state (the lead finished, was deleted ...), move it there. */
+    fun syncForeground(fallback: String) {
+        val s = svc ?: return
+        lastFallback = fallback
+        val want = leadDownload()?.notificationId ?: 1
+        if (want == fgId) return
+        val (id, n) = foregroundFor(s, fallback)
+        s.promote(id, n); fgId = id
+    }
+    /** The card that carries the foreground state is about to be replaced / removed: hand the state to the next card first (a foreground notification cannot be cancelled). */
+    private fun handoff(leavingNotifId: Int) {
+        val s = svc ?: return
+        if (leavingNotifId != fgId) return
+        val leaving = DownloadRepo.all.value.firstOrNull { it.notificationId == leavingNotifId }
+        val next = leadDownload(excluding = leaving?.id)
+        val (id, n) = if (next != null) cardFor(next) else 1 to summary(s, lastFallback)
+        s.promote(id, n); fgId = id
+    }
+
     /** Re-posts the ongoing notification only when something visible changed. */
     fun refreshSummary(c: Context, fallback: String) {
+        if (fgId != 1) return          // a card carries the foreground state: no separate service row
         val sig = activeList().joinToString(";") { "${it.id}:${it.state}:${it.pct}:${(it.speed / 262144).toInt()}:${it.etaSec / 20}:${it.iconReady}" } + "|" + fallback + "|" + Store.settings().notif
         if (sig == lastSig) return
         lastSig = sig
@@ -149,6 +192,7 @@ object Notifier {
 
     /** Completed / failed / not started: posted once (guarded by Download.terminalNotified), grouped. */
     fun result(d: Download) {
+        handoff(d.notificationId)
         clearTrouble(d.notificationId)
         if (!Store.settings().notif) return
         val ok = d.state == DlState.COMPLETED
@@ -176,7 +220,7 @@ object Notifier {
 
     private fun cancelAlert(id: Int) { runCatching { NotificationManagerCompat.from(ctx).cancel(id + ALERT_BASE) } }
     fun clearTrouble(id: Int) { troubleSince.remove(id); if (alerted.remove(id) != null) cancelAlert(id) }
-    fun cancel(id: Int) { clearTrouble(id); posted.remove(id); releaseSession(id); runCatching { NotificationManagerCompat.from(ctx).cancel(id) } }
+    fun cancel(id: Int) { handoff(id); clearTrouble(id); posted.remove(id); releaseSession(id); runCatching { NotificationManagerCompat.from(ctx).cancel(id) } }
 
     // ---------------------------------------------------------------------------------------------
     // Download cards (music-player style)
