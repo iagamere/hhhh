@@ -63,7 +63,8 @@ class CoverAnalysis(val primary: Int, val secondary: Int?, val colorfulness: Flo
 class Palette(
     val dark: Boolean, val surface: Int, val onSurface: Int, val onSurfaceVariant: Int,
     val accent: Int, val accentText: Int, val tertiary: Int,
-    val track: Int, val container: Int, val onContainer: Int, val warn: Int, val dim: Int)
+    val track: Int, val container: Int, val onContainer: Int, val warn: Int, val dim: Int,
+    /** background colour for a colourized media-style notification (Android picks the text colour for it) */ val media: Int)
 
 object CoverPalette {
     private const val BINS = 12
@@ -142,7 +143,8 @@ object CoverPalette {
             val tert = if (h2 != null) tone(h2[0], h2[1].coerceIn(0.45f, 0.85f), 0.64f, surface, 4.5, true) else accentText
             Palette(true, surface, onS, onV, accent, accentText, tert,
                 ColorMath.withAlpha(accent, 0x99), ColorMath.fromHsl(h, sat.coerceIn(0.10f, 0.50f), 0.26f), onS,
-                0xFFFFB74D.toInt(), ColorMath.blend(surface, accent, 0.45f))
+                0xFFFFB74D.toInt(), ColorMath.blend(surface, accent, 0.45f),
+                ColorMath.fromHsl(h, sat.coerceIn(0.25f, 0.65f), 0.30f))
         } else {
             val surface = ColorMath.fromHsl(h, sat.coerceIn(0.45f, 0.85f), 0.88f)
             val onS = tone(h, 0.45f, 0.10f, surface, 7.0, false)
@@ -153,7 +155,7 @@ object CoverPalette {
             val tert = if (h2 != null) tone(h2[0], h2[1].coerceIn(0.45f, 0.85f), 0.38f, surface, 4.5, false) else accentText
             Palette(false, surface, onS, onV, accent, accentText, tert,
                 ColorMath.withAlpha(accent, 0x99), ColorMath.fromHsl(h, sat.coerceIn(0.40f, 0.80f), 0.78f), onS,
-                0xFF8F4A00.toInt(), ColorMath.blend(surface, accent, 0.45f))
+                0xFF8F4A00.toInt(), ColorMath.blend(surface, accent, 0.45f), surface)
         }
     }
 }

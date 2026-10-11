@@ -13,6 +13,11 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.drawable.Icon
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Bundle
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -159,6 +164,7 @@ object Notifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText("$head\n$body")).setAutoCancel(true).setContentIntent(pi())
         cover(d)?.let { b.setLargeIcon(it) }
         CoverColor.forDownload(d)?.let { b.setColor(it) }
+        releaseSession(d.notificationId)
         post(d.notificationId, b.build())
         post(2, NotificationCompat.Builder(ctx, "done").setSmallIcon(R.drawable.ic_stat_ps4).setGroup("ps4_done").setGroupSummary(true)
             .setContentTitle(tr("PS4 downloads", "تحميلات PS4")).setAutoCancel(true).setContentIntent(pi()).build())
@@ -166,7 +172,7 @@ object Notifier {
 
     private fun cancelAlert(id: Int) { runCatching { NotificationManagerCompat.from(ctx).cancel(id + ALERT_BASE) } }
     fun clearTrouble(id: Int) { troubleSince.remove(id); if (alerted.remove(id) != null) cancelAlert(id) }
-    fun cancel(id: Int) { clearTrouble(id); posted.remove(id); runCatching { NotificationManagerCompat.from(ctx).cancel(id) } }
+    fun cancel(id: Int) { clearTrouble(id); posted.remove(id); releaseSession(id); runCatching { NotificationManagerCompat.from(ctx).cancel(id) } }
 
     // ---------------------------------------------------------------------------------------------
     // Download cards (music-player style)
@@ -203,8 +209,12 @@ object Notifier {
             DlState.PAUSED -> listOfNotNull(tr("Paused", "متوقف مؤقتًا"), leftTxt).joinToString(" • ")
             else -> listOfNotNull(d.state.label, leftTxt).joinToString(" • ")
         }
-        // same text as before in the notification header: remaining size, time left and speed
-        val sub = listOfNotNull(leftLine.ifEmpty { null }, speed).joinToString(" • ")
+        // notification header: kept SHORT (the card shows the rest), otherwise the system truncates the app name ("PS4 Download…")
+        val sub = when (d.state) {
+            DlState.DOWNLOADING -> if (d.etaSec >= 0) Fmt.dur(d.etaSec) else ""
+            DlState.PAUSED -> tr("Paused", "متوقف مؤقتًا")
+            else -> d.state.label
+        }
         return CardText(d.pct?.let { "$it%" }, size, leftLine, speed, sub)
     }
 
@@ -310,7 +320,8 @@ object Notifier {
         return rv
     }
 
-    private fun card(d: Download): Notification {
+    /** Fallback card (custom RemoteViews on the system's own grey surface), used when the media session cannot be created. */
+    private fun customCard(d: Download): Notification {
         val paused = d.state == DlState.PAUSED
         val confirm = confirming(d.id)
         val pal = palette(d)
@@ -326,6 +337,83 @@ object Notifier {
             .setCustomBigContentView(expandedView(d, pal, t, paused, confirm))
         return b.build()
     }
+
+
+    // ---------------------------------------------------------------------------------------------
+    // Media-style card (like Musicolet): the only kind of normal notification whose WHOLE background Android colours.
+    // ---------------------------------------------------------------------------------------------
+    private const val CA_TOGGLE = "ps4mon.toggle"
+    private const val CA_DELETE = "ps4mon.delete"
+    private val sessions = ConcurrentHashMap<Int, MediaSession>()     // notification id -> session of that download's card
+
+    /**
+     * One MediaSession per card. It is NEVER set active and has no hardware-key handling: it only exists so that Android treats the card as a media
+     * notification (colourized background, and the Android 13+ media player). Headset / media keys therefore keep going to your music player.
+     */
+    private fun session(d: Download): MediaSession = sessions.getOrPut(d.notificationId) {
+        MediaSession(ctx, "ps4mon-${d.notificationId}").also { s ->
+            s.setCallback(object : MediaSession.Callback() {
+                override fun onPlay() { onAction(ACT_RESUME, d.id) }
+                override fun onPause() { onAction(ACT_PAUSE, d.id) }
+                override fun onCustomAction(action: String, extras: Bundle?) {
+                    when (action) {
+                        CA_TOGGLE -> onAction(if (DownloadRepo.get(d.id)?.state == DlState.PAUSED) ACT_RESUME else ACT_PAUSE, d.id)
+                        CA_DELETE -> onAction(ACT_DELETE, d.id)
+                    }
+                }
+            }, Handler(Looper.getMainLooper()))
+        }
+    }
+    private fun releaseSession(nid: Int) { sessions.remove(nid)?.let { runCatching { it.release() } } }
+
+    private fun updateSession(d: Download, art: Bitmap, paused: Boolean, confirm: Boolean): MediaSession.Token {
+        val s = session(d)
+        s.setMetadata(MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, gameTitle(d))
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, psName(d).ifEmpty { "PS4" })
+            .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, 100_000L).build())      // the media player's bar: 100 s = 100 %
+        val pos = ((d.frac ?: 0f) * 100_000f).toLong()
+        s.setPlaybackState(PlaybackState.Builder()
+            .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE)
+            .setState(if (paused) PlaybackState.STATE_PAUSED else PlaybackState.STATE_PLAYING, pos, 0f)     // speed 0: the position never ticks by itself
+            .addCustomAction(PlaybackState.CustomAction.Builder(CA_TOGGLE, if (paused) tr("Resume", "استئناف") else tr("Pause", "إيقاف مؤقت"),
+                if (paused) R.drawable.ic_play else R.drawable.ic_pause).build())
+            .addCustomAction(PlaybackState.CustomAction.Builder(CA_DELETE, if (confirm) tr("Confirm delete", "تأكيد الحذف") else tr("Delete", "حذف"),
+                if (confirm) R.drawable.ic_warning else R.drawable.ic_delete).build())
+            .build())
+        return s.sessionToken
+    }
+    private fun cardAction(icon: Int, title: String, pi: PendingIntent) = Notification.Action.Builder(Icon.createWithResource(ctx, icon), title, pi).build()
+
+    private fun mediaCard(d: Download): Notification {
+        val paused = d.state == DlState.PAUSED
+        val confirm = confirming(d.id)
+        val pal = palette(d)
+        val t = cardTexts(d)
+        val art = coverBitmap(d, pal)
+        val token = updateSession(d, cover(d) ?: art, paused, confirm)
+        val text = if (confirm) tr("Tap the bin again to delete this download and its file", "اضغط سلة المهملات مرة أخرى لحذف التحميل وملفه")
+                   else listOfNotNull(t.line, t.speed).joinToString(" • ")
+        val b = Notification.Builder(ctx, "dl")
+            .setSmallIcon(R.drawable.ic_stat_ps4)
+            .setContentTitle(gameTitle(d)).setContentText(text).setSubText(t.sub.ifEmpty { null })
+            .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())
+            .setLargeIcon(art)
+            .setColor(pal.media).setColorized(true)           // honoured because the notification carries a MediaSession token
+            .addAction(if (paused) cardAction(R.drawable.ic_play, tr("Resume", "استئناف"), actionPi(ACT_RESUME, d))
+                       else cardAction(R.drawable.ic_pause, tr("Pause", "إيقاف مؤقت"), actionPi(ACT_PAUSE, d)))
+            .addAction(if (confirm) cardAction(R.drawable.ic_warning, tr("Confirm delete", "تأكيد الحذف"), actionPi(ACT_DELETE, d))
+                       else cardAction(R.drawable.ic_delete, tr("Delete", "حذف"), actionPi(ACT_DELETE, d)))
+            .setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1))
+        val f = d.frac
+        if (f != null) b.setProgress(1000, (f * 1000f).toInt().coerceIn(0, 1000), false)
+        else if (d.state == DlState.DOWNLOADING) b.setProgress(0, 0, true)
+        return b.build()
+    }
+
+    private fun card(d: Download): Notification =
+        try { mediaCard(d) } catch (e: Exception) { releaseSession(d.notificationId); customCard(d) }
 
     private fun cardSig(d: Download) =
         "${d.state}:${d.pct}:${d.currentSize shr 26}:${(d.speed / 262144).toInt()}:${d.etaSec / 20}:${d.iconReady}:${d.pkgTitle}:${confirming(d.id)}:${Lang.isAr}"
@@ -346,7 +434,7 @@ object Notifier {
         }
         for (id in posted.keys.toList()) {
             if (id in ids) continue
-            posted.remove(id)
+            posted.remove(id); releaseSession(id)
             // a finished download's card was already replaced by the result notification (same id); only remove cards that have no owner
             val owner = all.firstOrNull { it.notificationId == id }
             if (owner == null || owner.superseded) runCatching { NotificationManagerCompat.from(ctx).cancel(id) }

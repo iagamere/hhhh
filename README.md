@@ -20,6 +20,12 @@ Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
 
 
+## 4.3 media-session cards (current default)
+- The grey box around the card is System UI's own notification container; only a media-style notification with a MediaSession gets its WHOLE
+  background coloured (from the cover). Cards are now that (`Notifier.mediaCard`): MediaSession (never set active, so media keys are untouched),
+  cover as album art, native progress bar, Pause/Resume + Delete. The media player's bar reads 0..100 s = 0..100 %. If a device rejects it, the
+  RemoteViews card (`customCard`) is used automatically.
+
 ## 4.3 notification redesign (cards)
 - **Real progress bar.** The block characters are gone. Each download card is a custom `RemoteViews` layout (`DecoratedCustomViewStyle`, so the
   system header with the app name stays) containing a real determinate `ProgressBar` (rounded fill over a rounded track, 0..1000 for smooth steps).
