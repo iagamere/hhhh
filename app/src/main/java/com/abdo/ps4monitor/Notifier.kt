@@ -49,6 +49,7 @@ object Notifier {
     private val troubleSince = ConcurrentHashMap<Int, Long>()
     private val alerted = ConcurrentHashMap<Int, Long>()
     private const val ALERT_BASE = 500_000
+    private const val SERVICE_CHANNEL = "monitor_hidden"
     const val ACT_PAUSE = "com.abdo.ps4monitor.NOTIF_PAUSE"
     const val ACT_RESUME = "com.abdo.ps4monitor.NOTIF_RESUME"
     const val ACT_DELETE = "com.abdo.ps4monitor.NOTIF_DELETE"
@@ -62,7 +63,10 @@ object Notifier {
         runCatching { m.deleteNotificationChannel("active"); m.deleteNotificationChannel("results") }     // channels of the old version
         runCatching { m.deleteNotificationChannel("monitor") }     // channel of 4.2 (its notification was the big combined one)
         m.createNotificationChannel(NotificationChannel("dl", tr("Downloads", "التحميلات"), NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
-        m.createNotificationChannel(NotificationChannel("monitor_min", tr("Monitoring (service)", "المراقبة (الخدمة)"), NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) })
+        // The mandatory foreground-service notification lives on a channel that is created BLOCKED (IMPORTANCE_NONE): the service keeps running, but
+        // the notification is not shown in the shade, so only the download cards remain. (The user can still enable it: Settings > Notifications.)
+        runCatching { m.deleteNotificationChannel("monitor_min") }        // the visible channel of 4.3 (may fail while the old service is alive: harmless)
+        m.createNotificationChannel(NotificationChannel(SERVICE_CHANNEL, tr("Monitoring (service, hidden)", "المراقبة (الخدمة، مخفية)"), NotificationManager.IMPORTANCE_NONE).apply { setShowBadge(false) })
         m.createNotificationChannel(NotificationChannel("alerts", tr("Interruptions", "انقطاع التحميل"), NotificationManager.IMPORTANCE_HIGH))
         m.createNotificationChannel(NotificationChannel("done", tr("Finished downloads", "التحميلات المنتهية"), NotificationManager.IMPORTANCE_DEFAULT))
     }
@@ -87,7 +91,7 @@ object Notifier {
     /** The mandatory foreground-service notification (id 1): one quiet line. The per-download cards carry the details. */
     fun summary(c: Context, fallback: String): Notification {
         val act = activeList()
-        val b = NotificationCompat.Builder(c, "monitor_min").setSmallIcon(R.drawable.ic_stat_ps4).setOngoing(true).setOnlyAlertOnce(true)
+        val b = NotificationCompat.Builder(c, SERVICE_CHANNEL).setSmallIcon(R.drawable.ic_stat_ps4).setOngoing(true).setOnlyAlertOnce(true)
             .setShowWhen(false).setContentIntent(pi()).setPriority(NotificationCompat.PRIORITY_MIN).setContentTitle("PS4 Monitor")
         if (act.isEmpty() || !Store.settings().notif) return b.setContentText(fallback).build()
         val speed = act.filter { it.state == DlState.DOWNLOADING }.sumOf { it.speed }

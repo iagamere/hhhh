@@ -20,6 +20,11 @@ Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
 
 
+## 4.3 hidden service notification
+- The foreground-service notification (id 1) is posted on the new channel `monitor_hidden`, created with IMPORTANCE_NONE (blocked), so it is not
+  shown in the shade; only the download cards are. Android still lists the running service in its own task manager. If a device shows it anyway,
+  swipe it away (Android 13+) or switch that channel off in Settings > Notifications.
+
 ## 4.3 full-bleed cards (current): no grey box
 - Android docs: apps targeting 31+ cannot create fully custom notifications; the system wraps them in its standard template (the grey container).
   With `targetSdk = 30` (compileSdk stays 34) a custom layout WITHOUT a style is the whole notification, so the cover-coloured surface runs edge to edge.
