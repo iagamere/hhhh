@@ -200,7 +200,7 @@ object DownloadMonitor {
             val p = Ps4Repo.get(ps4Id) ?: return
             val ds = watched(ps4Id); if (ds.isEmpty()) return
             val s = Store.settings()
-            val srv: List<SrvEntry>? = try { EzServer.list(p, 3000).also { upStatus(p.id) { it.copy(web = Link.AVAILABLE, bg = Link.AVAILABLE) } } }
+            val srv: List<SrvEntry>? = try { EzServer.list(p, 3000).also { upStatus(p.id) { it.copy(bg = Link.AVAILABLE) }      // the server answering says nothing about ezRemote web (port 8080) } }
                 catch (e: Exception) { upStatus(p.id) { it.copy(bg = Link.UNAVAILABLE) }; d("ezRemote Server (port 6701) not reachable: ${e.javaClass.simpleName}"); null }
             val hist = lazy { BgHistory.cached(p) }
             for (d0 in ds) {

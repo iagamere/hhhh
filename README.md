@@ -1,4 +1,4 @@
-# PS4 Download Monitor 4.4
+# PS4 Download Monitor 4.6
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 
@@ -60,6 +60,10 @@ artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop m
 - Hue binning in `CoverColor.dominant` is now centred on 0 degrees, so red covers are no longer split into two half-weight bins.
 - NOT compiled here either (no Android SDK): see the notes in the change report.
 
+## 4.5
+- Fix: the home screen showed "ezRemote web: Available" whenever ezRemote Server answered, even when ezRemote web (port 8080) was not reachable (the
+  detail text below said so). The web status now only comes from a real check of port 8080 (Refresh, or opening the screen).
+
 ## 4.4 (downloads while a game is running)
 - **Links are sent straight to ezRemote Server** (port 6701, `POST /v2/add`) when the custom server is running. Before, every download went through
   ezRemote Client's web server (port 8080); the PS4 suspends ezRemote Client while a game runs, so nothing could be added. The server is a payload and
@@ -91,3 +95,8 @@ artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop m
   setting "Alert me when a download is interrupted"); one grouped notification per finished download.
 - **Cover colours:** cards, progress bars and the detail screen take the dominant colour of the game's cover.
 - The custom server retries transient failures forever (only consecutive failures count), so downloads no longer stop and wait for "Resume".
+
+## 4.6 one card per download, never bundled
+- Every card has its own group key (`ps4_dl_<notification id>`) and no summary, so Android / ColorOS does not bundle two downloads under a grey
+  "PS4 Download Monitor" header. Not verified on a device: if a launcher still bundles them, that is its own app-level grouping.
+- NOT compiled by the author (no Android SDK here).

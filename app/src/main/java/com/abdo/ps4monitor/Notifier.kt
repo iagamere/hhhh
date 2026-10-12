@@ -392,6 +392,7 @@ object Notifier {
         val pal = palette(d)
         val t = cardTexts(d)
         val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setGroup("ps4_dl_${d.notificationId}")      // a group key of its own per card (and no summary): the system must not bundle two cards under one grey app header
             .setSmallIcon(R.drawable.ic_stat_ps4)
             // plain title / text: not drawn (the custom views are), but used by accessibility, the lock screen and watches
             .setContentTitle(gameTitle(d)).setContentText(t.line).setSubText(t.sub.ifEmpty { null })
@@ -460,6 +461,7 @@ object Notifier {
         val text = if (confirm) tr("Tap the bin again to delete this download and its file", "اضغط سلة المهملات مرة أخرى لحذف التحميل وملفه")
                    else listOfNotNull(t.line, t.speed).joinToString(" • ")
         val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setGroup("ps4_dl_${d.notificationId}")      // a group key of its own per card (and no summary): the system must not bundle two cards under one grey app header
             .setSmallIcon(R.drawable.ic_stat_ps4)
             .setContentTitle(gameTitle(d)).setContentText(text).setSubText(t.sub.ifEmpty { null })
             .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())
