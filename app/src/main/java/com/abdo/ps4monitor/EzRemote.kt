@@ -62,6 +62,10 @@ object EzRemote {
 
     /** POST /__local__/list {path, onlyFolders} -> {"result":[{name,rights,date,size(string),type:"dir"|"file"}]} */
     fun list(ps4: Ps4, path: String, timeoutMs: Int): List<FsEntry> {
+        if (EzServer.fsUsable(ps4, path)) try { return EzServer.fsList(ps4, path, timeoutMs) } catch (e: EzServer.FsUnavailable) { }
+        return webList(ps4, path, timeoutMs)
+    }
+    private fun webList(ps4: Ps4, path: String, timeoutMs: Int): List<FsEntry> {
         val c = post(ps4, "/__local__/list", timeoutMs, timeoutMs)
         try {
             c.outputStream.use { it.write(JSONObject().put("path", path).put("onlyFolders", false).toString().toByteArray()) }
@@ -76,7 +80,7 @@ object EzRemote {
         } finally { c.disconnect() }
     }
     /** "date" is "YYYY-MM-DD HH:MM:SS" (PS4 wall clock), parsed with the phone zone so it is displayed unchanged. */
-    private fun parseDate(t: String): Long = runCatching { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(t)?.time ?: 0L }.getOrDefault(0L)
+    fun parseDate(t: String): Long = runCatching { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).parse(t)?.time ?: 0L }.getOrDefault(0L)
 
     private fun op(ps4: Ps4, path: String, body: JSONObject, connectMs: Int, readMs: Int): OpResult {
         val c = post(ps4, path, connectMs, readMs)
@@ -92,9 +96,23 @@ object EzRemote {
     private fun items(l: List<String>) = JSONArray(l)
 
     /** POST /__local__/remove {"items":[...]} — recursive (folders go with their content); refused while ezRemote is busy with another activity. */
-    fun remove(ps4: Ps4, paths: List<String>, readMs: Int = 120_000) = op(ps4, "/__local__/remove", JSONObject().put("items", items(paths)), 10_000, readMs)
-    fun rename(ps4: Ps4, from: String, to: String) = op(ps4, "/__local__/rename", JSONObject().put("item", from).put("newItemPath", to), 10_000, 30_000)
-    fun createFolder(ps4: Ps4, path: String) = op(ps4, "/__local__/createFolder", JSONObject().put("newPath", path), 10_000, 30_000)
+    fun remove(ps4: Ps4, paths: List<String>, readMs: Int = 120_000): OpResult {
+        if (paths.isNotEmpty() && paths.all { EzServer.fsUsable(ps4, it) }) {
+            try {
+                for (p in paths) { val r = EzServer.fsOp(ps4, "delete", JSONObject().put("path", p)); if (!r.ok && !r.message.startsWith("No such")) return r }
+                return OpResult(true, "")
+            } catch (e: EzServer.FsUnavailable) { }
+        }
+        return op(ps4, "/__local__/remove", JSONObject().put("items", items(paths)), 10_000, readMs)
+    }
+    fun rename(ps4: Ps4, from: String, to: String): OpResult {
+        if (EzServer.fsUsable(ps4, from) && EzServer.fsUsable(ps4, to)) try { return EzServer.fsOp(ps4, "rename", JSONObject().put("from", from).put("to", to)) } catch (e: EzServer.FsUnavailable) { }
+        return op(ps4, "/__local__/rename", JSONObject().put("item", from).put("newItemPath", to), 10_000, 30_000)
+    }
+    fun createFolder(ps4: Ps4, path: String): OpResult {
+        if (EzServer.fsUsable(ps4, path)) try { return EzServer.fsOp(ps4, "mkdir", JSONObject().put("path", path)) } catch (e: EzServer.FsUnavailable) { }
+        return op(ps4, "/__local__/createFolder", JSONObject().put("newPath", path), 10_000, 30_000)
+    }
     /** POST /__local__/move | copy {"items":[..],"newPath":destinationFolder} — synchronous, can take very long for big files. */
     fun move(ps4: Ps4, paths: List<String>, dest: String) = op(ps4, "/__local__/move", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
     fun copy(ps4: Ps4, paths: List<String>, dest: String) = op(ps4, "/__local__/copy", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
@@ -108,6 +126,7 @@ object EzRemote {
 
     /** GET /__local__/uploadResumeSize?destination=&filename= -> {"size":N}; 0 when the file does not exist. A cheap single-file size query. */
     fun fileSize(ps4: Ps4, path: String, timeoutMs: Int): Long {
+        if (EzServer.fsUsable(ps4, path)) try { return EzServer.fsSizeSafe(ps4, path, timeoutMs) } catch (e: EzServer.FsUnavailable) { }
         val dir = path.substringBeforeLast('/', "/").ifEmpty { "/" }; val name = path.substringAfterLast('/')
         val c = URL(url(ps4, "/__local__/uploadResumeSize?destination=" + URLEncoder.encode(dir, "UTF-8") + "&filename=" + URLEncoder.encode(name, "UTF-8"))).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs
@@ -120,6 +139,7 @@ object EzRemote {
      * the handler opens the file without checking.
      */
     fun readRange(ps4: Ps4, path: String, offset: Long, length: Int, timeoutMs: Int): ByteArray {
+        if (EzServer.fsUsable(ps4, path)) try { return EzServer.fsRead(ps4, path, offset, length, timeoutMs) } catch (e: EzServer.FsUnavailable) { }
         val c = URL(url(ps4, "/__local__/downloadFile?path=" + URLEncoder.encode(path, "UTF-8"))).openConnection() as HttpURLConnection
         c.requestMethod = "GET"; c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs
         c.setRequestProperty("Range", "bytes=$offset-${offset + length - 1}")

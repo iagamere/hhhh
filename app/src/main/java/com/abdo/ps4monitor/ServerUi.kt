@@ -24,7 +24,9 @@ import kotlinx.coroutines.withContext
 @Composable fun ServerScreen(nav: NavController) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope(); val clip = LocalClipboardManager.current
     val activeId by Ps4Repo.activeId.collectAsState()
-    val p = remember(activeId) { Ps4Repo.active() }
+    val ps4List by Ps4Repo.list.collectAsState()
+    val p = remember(activeId, ps4List) { Ps4Repo.active() }
+    var tokenText by remember { mutableStateOf("") }
     var info by remember { mutableStateOf<EzServer.ServerInfo?>(null) }
     var checked by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -99,6 +101,7 @@ import kotlinx.coroutines.withContext
             val line = when {
                 !checked -> tr("Checking…", "جارٍ الفحص…")
                 i == null -> tr("Not reachable on ${p.host}:6701", "غير متاح على ${p.host}:6701")
+                i.locked -> tr("The server asks for a token. Enter it in this PS4's settings (Settings > edit PS4).", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز (الإعدادات > تعديل PS4).")
                 i.custom -> tr("Custom server ", "السيرفر المخصص ") + i.version
                 else -> tr("Original ezRemote Server (no per-download control)", "خادم ezRemote الأصلي (بلا تحكم بتحميل واحد)")
             }
@@ -121,7 +124,7 @@ import kotlinx.coroutines.withContext
             if (progress >= 0) LinearProgressIndicator(progress = { progress / 100f }, Modifier.fillMaxWidth())
         }
 
-        if (i != null && i.custom) Panel {
+        if (i != null && i.custom && !i.locked) Panel {
             SectionTitle(tr("Download settings", "إعدادات التحميل"))
             Text(tr("Downloads at the same time", "التحميلات المتزامنة"))
             Chips(listOf(1, 2, 3, 4), i.maxParallel, "") { v -> push("{\"max_parallel\":$v}") }
@@ -139,6 +142,41 @@ import kotlinx.coroutines.withContext
                 Text(tr("Connections per download", "الاتصالات لكل تحميل"))
                 Chips(listOf(1, 2, 4, 6, 8), i.fixedConns, "") { v -> push("{\"fixed_conns\":$v}") }
             }
+        }
+
+        if (i != null && i.custom && !i.locked) Panel {
+            SectionTitle(tr("File access through the server", "الوصول إلى الملفات عبر الخادم"))
+            Dim(tr("Lets the app list, read, rename and delete files in /data and /mnt through this server (port 6701), which keeps working while a game runs. Without it the Files tab, covers and file checks need ezRemote's web server, which the PS4 suspends during games. Anyone on your network who has the token (or any device if no token is set) could read those folders.",
+                "يتيح للتطبيق عرض وقراءة وإعادة تسمية وحذف الملفات في /data و /mnt عبر هذا الخادم (المنفذ 6701) الذي يستمر بالعمل أثناء اللعب. بدونه تحتاج تبويبة الملفات والأغلفة وفحوص الملفات إلى خادم ويب ezRemote الذي يعلّقه الـPS4 أثناء الألعاب. أي جهاز في شبكتك يملك الرمز (أو أي جهاز إن لم يُضبط رمز) يستطيع قراءة هذه المجلدات."))
+            if (i.fsApi < 1) Dim(tr("This server build has no file API. Send the newest server.", "نسخة الخادم هذه بلا واجهة ملفات. أرسل أحدث خادم."))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(tr("Allow", "السماح"), Modifier.weight(1f))
+                Switch(checked = i.fsRoots.isNotEmpty(), enabled = i.fsApi >= 1 && !busy, onCheckedChange = { v ->
+                    scope.launch {
+                        val e = withContext(Dispatchers.IO) { EzServer.setFsAccess(p, v) }
+                        msg = if (e != null) Tx.t(e) else ""
+                        refresh()
+                    }
+                })
+            }
+        }
+
+        if (i != null && i.custom && !i.locked) Panel {
+            SectionTitle(tr("Server token", "رمز الخادم"))
+            Dim(if (i.tokenSet) tr("A token is set. Every request must carry it; this app sends the one saved for this PS4.", "رمز مضبوط. يجب أن يحمله كل طلب؛ والتطبيق يرسل المحفوظ لهذا الجهاز.")
+                else tr("No token is set: any device on your network can control the server. A token protects the /v2 routes (control, files, settings). ezRemote Client's own routes (add / list downloads) stay open so it keeps working. If you forget the token, resend the server from GoldHEN and clear dlserver_settings.json on the PS4.",
+                    "لا رمز مضبوط: أي جهاز في شبكتك يستطيع التحكم بالخادم. الرمز يحمي مسارات /v2 (التحكم والملفات والإعدادات)، أما مسارات ezRemote Client نفسه (إضافة/عرض التحميلات) فتبقى مفتوحة ليستمر بالعمل. إن نسيت الرمز فأعد إرسال الخادم من GoldHEN وامسح dlserver_settings.json من الـPS4."))
+            OutlinedTextField(tokenText, { tokenText = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("New token (empty = remove)", "الرمز الجديد (فارغ = إزالة)")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(enabled = !busy && (tokenText.isNotEmpty() || i.tokenSet), onClick = {
+                val newTok = tokenText.trim()
+                scope.launch {
+                    busy = true
+                    val c = withContext(Dispatchers.IO) { EzServer.setServerToken(p, newTok) }
+                    if (c.ok) { val np = p.copy(token = newTok); Ps4Repo.save(np); EzServer.forget(np); info = withContext(Dispatchers.IO) { EzServer.info(np) }; checked = true; tokenText = ""; msg = if (newTok.isEmpty()) tr("Token removed.", "أُزيل الرمز.") else tr("Token set and saved in the app for this PS4.", "ضُبط الرمز وحُفظ في التطبيق لهذا الجهاز.") }
+                    else msg = tr("Could not change the token: ", "تعذّر تغيير الرمز: ") + Tx.t(c.message)
+                    busy = false
+                }
+            }) { Lbl(if (tokenText.isEmpty() && i.tokenSet) tr("Remove token", "إزالة الرمز") else tr("Set token", "ضبط الرمز")) }
         }
 
         Panel {

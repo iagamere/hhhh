@@ -1,8 +1,11 @@
 package com.abdo.ps4monitor
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -11,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class SrvEntry(val path: String, val bytes: Long, val size: Long, val state: Int, val ts: Long,
                val id: Int = 0, val speed: Double = 0.0, val conns: Int = 0, val attempts: Int = 0, val error: String = "", val v2: Boolean = false,
-               val fatal: Boolean = false) {
+               val fatal: Boolean = false, val priority: Int = 0, val position: Int = 0) {
     val pending get() = state == 0
     val active get() = state == 1 || state == 2 || state == 7   // DOWNLOADING, RESUMED, STOPPING (v2)
     val failed get() = state == 3
@@ -31,12 +34,21 @@ class SrvEntry(val path: String, val bytes: Long, val size: Long, val state: Int
 object EzServer {
     const val PORT = 6701
     class Reply(val code: Int, val body: String)
-    private class V2Info(val ok: Boolean, val at: Long, val maxAttempts: Int)
+    private class V2Info(val ok: Boolean, val at: Long, val maxAttempts: Int, val fsRoots: List<String> = emptyList(), val fsApi: Int = 0)
     private val v2cache = ConcurrentHashMap<String, V2Info>()
-
-    private fun call(ps4: Ps4, method: String, path: String, body: String?, timeoutMs: Int): Reply {
+    private val locked = ConcurrentHashMap<String, Boolean>()
+    /** The server answered 401: it has a token and this app has none (or a wrong one). */
+    fun isLocked(ps4: Ps4): Boolean = locked[ps4.id] == true
+    private fun open(ps4: Ps4, method: String, path: String, timeoutMs: Int): HttpURLConnection {
         val c = URL("http://${ps4.host}:$PORT$path").openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs; c.requestMethod = method
+        if (ps4.token.isNotEmpty()) c.setRequestProperty("X-Token", ps4.token)
+        return c
+    }
+    private fun rootsOf(st: JSONObject?): List<String> = st?.optJSONArray("fs_roots")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.startsWith("/") } } ?: emptyList()
+
+    private fun call(ps4: Ps4, method: String, path: String, body: String?, timeoutMs: Int): Reply {
+        val c = open(ps4, method, path, timeoutMs)
         try {
             if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) } }
             val code = c.responseCode
@@ -55,10 +67,23 @@ object EzServer {
         val now = System.currentTimeMillis(); val c = v2cache[ps4.id]
         if (c != null && now - c.at < (if (c.ok) 120_000L else 30_000L)) return c.ok
         val r = call(ps4, "GET", "/v2/info", null, timeoutMs)
+        if (r.code == 401) {
+            if (locked.put(ps4.id, true) != true) DownloadMonitor.d("ezRemote Server asks for a token (X-Token): enter it in this PS4's settings in the app.")
+            v2cache[ps4.id] = V2Info(false, now, 5)
+            return false
+        }
+        locked.remove(ps4.id)
         val info = if (r.code == 200) runCatching { JSONObject(r.body) }.getOrNull() else null
         val ok = info != null && info.optInt("api") >= 2
-        val maxAtt = info?.optJSONObject("settings")?.optInt("max_attempts", 5) ?: 5
-        v2cache[ps4.id] = V2Info(ok, now, maxAtt)
+        val st = info?.optJSONObject("settings")
+        val maxAtt = st?.optInt("max_attempts", 5) ?: 5
+        val fsApi = info?.optInt("fs_api") ?: 0
+        var roots = rootsOf(st)
+        // file access through the server is switched on once (the user can turn it off in the Server screen); the server keeps it disabled until then
+        if (ok && fsApi >= 1 && roots.isEmpty() && Store.sp.getBoolean("fs_auto", true)) {
+            enableFs(ps4, true)?.let { roots = it; DownloadMonitor.d("File access through the server enabled for: " + it.joinToString()) }
+        }
+        v2cache[ps4.id] = V2Info(ok, now, maxAtt, roots, fsApi)
         return ok
     }
     /** What the last check found; never touches the network. */
@@ -68,7 +93,8 @@ object EzServer {
     fun list(ps4: Ps4, timeoutMs: Int): List<SrvEntry> {
         if (isV2(ps4, timeoutMs)) {
             val r = call(ps4, "GET", "/v2/downloads", null, timeoutMs)
-            if (r.code == 404) v2cache.remove(ps4.id)                       // replaced by an original server: use the old API below
+            if (r.code == 401) { locked[ps4.id] = true; v2cache.remove(ps4.id) }   // token changed under us: re-detect
+            else if (r.code == 404) v2cache.remove(ps4.id)                       // replaced by an original server: use the old API below
             else if (r.code in 200..299) return parseV2(r.body)
             else throw EzError("ezRemote Server answered HTTP ${r.code}.")
         }
@@ -84,7 +110,7 @@ object EzServer {
         return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { o ->
             SrvEntry(o.optString("path"), o.optLong("bytes"), o.optLong("size"), o.optInt("state", -1), o.optLong("timestamp"),
                 id = o.optInt("id"), speed = o.optDouble("speed", 0.0), conns = o.optInt("connections"), attempts = o.optInt("attempts"),
-                error = o.optString("error"), v2 = true, fatal = o.optBoolean("final")) }
+                error = o.optString("error"), v2 = true, fatal = o.optBoolean("final"), priority = o.optInt("priority"), position = o.optInt("position")) }
     }
     fun up(ps4: Ps4): Boolean = try { list(ps4, 3000); true } catch (e: Exception) { false }
 
@@ -98,15 +124,18 @@ object EzServer {
     fun sane(size: Long) = size in (1L shl 16)..(1L shl 42)
 
     // ---------------- status / settings / log of the custom server ----------------
-    class ServerInfo(val version: String, val custom: Boolean, val maxParallel: Int, val maxConns: Int, val auto: Boolean, val fixedConns: Int)
+    class ServerInfo(val version: String, val custom: Boolean, val maxParallel: Int, val maxConns: Int, val auto: Boolean, val fixedConns: Int,
+                     val fsRoots: List<String> = emptyList(), val fsApi: Int = 0, val tokenSet: Boolean = false, val locked: Boolean = false)
     /** null = not reachable. An original server answers 404 to /v2/info. */
     fun info(ps4: Ps4, timeoutMs: Int = 3000): ServerInfo? = try {
         val r = call(ps4, "GET", "/v2/info", null, timeoutMs)
         val j = if (r.code == 200) runCatching { JSONObject(r.body) }.getOrNull() else null
-        if (j != null && j.optInt("api") >= 2) {
+        if (r.code == 401) ServerInfo("", true, 2, 8, true, 4, locked = true)
+        else if (j != null && j.optInt("api") >= 2) {
             val st = j.optJSONObject("settings")
             ServerInfo(j.optString("version"), true, st?.optInt("max_parallel", 2) ?: 2, st?.optInt("max_conns_per_download", 8) ?: 8,
-                st?.optBoolean("auto_conns", true) ?: true, st?.optInt("fixed_conns", 4) ?: 4)
+                st?.optBoolean("auto_conns", true) ?: true, st?.optInt("fixed_conns", 4) ?: 4,
+                rootsOf(st), j.optInt("fs_api"), st?.optBoolean("token_set", false) ?: false)
         } else if (r.code == 404) ServerInfo("original", false, 1, 1, false, 1)
         else null
     } catch (e: Exception) { null }
@@ -132,6 +161,7 @@ object EzServer {
         val j = runCatching { JSONObject(r.body) }.getOrNull()
         when {
             r.code in 200..299 && j?.optBoolean("ok", true) != false -> Ctl(true, "")
+            r.code == 401 -> Ctl(false, "The server asks for a token. Enter it in this PS4's settings in the app.")
             j == null && r.code == 404 -> Ctl(false, "", legacy = true)
             else -> Ctl(false, j?.optString("error").orEmpty().ifBlank { "HTTP ${r.code}" })
         }
@@ -161,6 +191,86 @@ object EzServer {
             }
         } catch (e: Exception) { EzRemote.Submit.Unreachable(EzRemote.friendly(e)) }
     }
+    // ---------------- queue order (custom server) ----------------
+    fun setPriority(ps4: Ps4, id: Int, priority: Int): Ctl = control(ps4, "/v2/priority", "{\"id\":$id,\"priority\":$priority}")
+    /** to: top | bottom | up | down */
+    fun move(ps4: Ps4, id: Int, to: String): Ctl = control(ps4, "/v2/move", "{\"id\":$id,\"to\":\"$to\"}")
+    /** Top of the queue, priority above all others, resumes it if stopped; with preemption another download steps aside. */
+    fun startNow(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/start_now", "{\"id\":$id}")
+
+    // ---------------- file access through the server (/v2/fs/*) ----------------
+    // The PS4 suspends ezRemote Client and its web server (port 8080) while a game runs; this server keeps answering. EzRemote's file functions
+    // try the server first for paths inside the folders the server allows, and fall back to the web server when the server cannot do it.
+    class FsUnavailable(msg: String) : IOException(msg)
+    private val fsFailAt = ConcurrentHashMap<String, Long>()
+    private const val FS_ROOTS = "[\"/data\",\"/mnt\"]"
+    private fun enableFs(ps4: Ps4, on: Boolean): List<String>? = try {
+        val r = call(ps4, "POST", "/v2/settings", "{\"fs_roots\":" + (if (on) FS_ROOTS else "[]") + "}", 4000)
+        if (r.code in 200..299) rootsOf(JSONObject(r.body).optJSONObject("settings")) else null
+    } catch (e: Exception) { null }
+    /** Turns file access through the server on or off (and remembers the choice). Null = done, otherwise an error text. */
+    fun setFsAccess(ps4: Ps4, on: Boolean): String? {
+        Store.sp.edit().putBoolean("fs_auto", on).apply()
+        val roots = enableFs(ps4, on)
+        forget(ps4)
+        return if (roots == null) "Could not change the setting on the server." else null
+    }
+    /** Sets (or clears, with "") the token the server requires. The app must send the NEW value from then on: the caller saves it. */
+    fun setServerToken(ps4: Ps4, token: String): Ctl = control(ps4, "/v2/settings", JSONObject().put("token", token).toString())
+
+    fun fsUsable(ps4: Ps4, path: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - (fsFailAt[ps4.id] ?: 0L) < 10_000L) return false
+        val ok = try { isV2(ps4, 2500) } catch (e: Exception) { fsFailAt[ps4.id] = now; false }
+        if (!ok) return false
+        val roots = v2cache[ps4.id]?.fsRoots.orEmpty()
+        return roots.any { path == it || path.startsWith("$it/") }
+    }
+    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+    /** Definitive failures (missing file, name taken...) become EzError; everything that means "ask the web server instead" becomes FsUnavailable. */
+    private fun fsJson(ps4: Ps4, r: Reply): JSONObject {
+        if (r.code == 401 || r.code == 403) { if (r.code == 403) v2cache.remove(ps4.id); throw FsUnavailable("HTTP ${r.code}") }
+        val j = runCatching { JSONObject(r.body) }.getOrNull() ?: throw FsUnavailable("Unexpected reply (HTTP ${r.code})")
+        if (r.code !in 200..299 || !j.optBoolean("ok", true)) throw EzError(j.optString("error").ifBlank { "ezRemote Server answered HTTP ${r.code}." })
+        return j
+    }
+    private fun fsCall(ps4: Ps4, method: String, path: String, body: String?, timeoutMs: Int): JSONObject {
+        val r = try { call(ps4, method, path, body, timeoutMs) } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(EzRemote.friendly(e)) }
+        return fsJson(ps4, r)
+    }
+    fun fsList(ps4: Ps4, path: String, timeoutMs: Int): List<FsEntry> {
+        val a = fsCall(ps4, "GET", "/v2/fs/list?path=" + enc(path), null, timeoutMs).optJSONArray("entries") ?: JSONArray()
+        return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { e ->
+            val dt = EzRemote.parseDate(e.optString("date"))
+            FsEntry(e.optString("name"), e.optLong("size"), if (dt > 0) dt else e.optLong("mtime") * 1000, e.optBoolean("dir")) }
+    }
+    /** Size in bytes; 0 when the file does not exist (same convention as the web query). */
+    fun fsSize(ps4: Ps4, path: String, timeoutMs: Int): Long {
+        val j = fsCall(ps4, "GET", "/v2/fs/stat?path=" + enc(path), null, timeoutMs)
+        return if (j.optBoolean("exists", false)) j.optLong("size") else 0L
+    }
+    fun fsSizeSafe(ps4: Ps4, path: String, timeoutMs: Int): Long =
+        try { fsSize(ps4, path, timeoutMs) } catch (e: EzError) { if ((e.message ?: "").let { it.startsWith("Parent folder") || it.startsWith("No such") }) 0L else throw e }
+    fun fsRead(ps4: Ps4, path: String, offset: Long, length: Int, timeoutMs: Int): ByteArray {
+        val out = ByteArrayOutputStream(); var off = offset; var left = length
+        while (left > 0) {
+            val n = minOf(left, 4 shl 20)
+            val c = open(ps4, "GET", "/v2/fs/read?path=" + enc(path) + "&offset=$off&length=$n", timeoutMs)
+            val chunk: ByteArray = try {
+                val code = try { c.responseCode } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(EzRemote.friendly(e)) }
+                if (code == 200) c.inputStream.readBytes()
+                else fsJson(ps4, Reply(code, runCatching { c.errorStream?.bufferedReader()?.readText().orEmpty() }.getOrDefault(""))).let { ByteArray(0) }
+            } finally { c.disconnect() }
+            if (chunk.isEmpty()) break
+            out.write(chunk); off += chunk.size; left -= chunk.size
+        }
+        return out.toByteArray()
+    }
+    /** op: delete {path} | rename {from,to} | mkdir {path}. */
+    fun fsOp(ps4: Ps4, op: String, body: JSONObject): EzRemote.OpResult = try {
+        fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), 60_000); EzRemote.OpResult(true, "")
+    } catch (e: EzError) { EzRemote.OpResult(false, e.message ?: "ezRemote Server refused the request.") }
+
     fun pause(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/pause", "{\"id\":$id}")
     fun resume(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/resume", "{\"id\":$id}")
     /** Cancels a running download without touching the others. deleteFiles: also the partial file (and the finished file of a finished one). */

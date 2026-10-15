@@ -1,4 +1,4 @@
-# PS4 Download Monitor 4.6
+# PS4 Download Monitor 5.0
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 
@@ -19,6 +19,12 @@ Names, Fmt, Lang, and the UI (MainActivity, Ui, HomeUi, DownloadsUi, FilesUi, Pk
 Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link, upload, text editor, save-to-phone, image preview,
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
 
+## 5.0 (goes with ezRemote Server 2.0.0-abdo9)
+- Queue control (custom server): download details show position and priority, with Start now / To top / Up / Down / To bottom and High / Normal / Low priority (`/v2/start_now`, `/v2/move`, `/v2/priority`).
+- Files, covers, name checks, file sizes, rename / delete / new folder go through the server (`/v2/fs/*`, port 6701) for paths in /data and /mnt, so they work while a game runs; anything else, or an older server, falls back to ezRemote web (8080). Copy, move, extract, install and edit still need ezRemote web. The app switches file access on once; the Server screen has a switch to turn it off.
+- Server token: field in the PS4 settings, sent as `X-Token` on every server call; the Server screen can set or remove the token on the server. A locked server is reported instead of looking "old".
+- "Finished" and "interrupted" notifications use the card look (cover colour, name, bar).
+- NOT compiled (no Android SDK here) and not run on a phone or PS4.
 
 ## 4.3 cards not silent, visible on the lock screen
 - Channel `dl_v2`: IMPORTANCE_DEFAULT with no sound / vibration (so the cards are out of the "Silent" section), lock-screen visibility PUBLIC.
@@ -95,8 +101,3 @@ artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop m
   setting "Alert me when a download is interrupted"); one grouped notification per finished download.
 - **Cover colours:** cards, progress bars and the detail screen take the dominant colour of the game's cover.
 - The custom server retries transient failures forever (only consecutive failures count), so downloads no longer stop and wait for "Resume".
-
-## 4.6 one card per download, never bundled
-- Every card has its own group key (`ps4_dl_<notification id>`) and no summary, so Android / ColorOS does not bundle two downloads under a grey
-  "PS4 Download Monitor" header. Not verified on a device: if a launcher still bundles them, that is its own app-level grouping.
-- NOT compiled by the author (no Android SDK here).

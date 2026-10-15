@@ -2,7 +2,7 @@ package com.abdo.ps4monitor
 import java.util.UUID
 
 /** One PS4. Everything goes through ezRemote's web server (default 8080) and ezRemote Server (port 6701); no FTP. */
-data class Ps4(val id: String = UUID.randomUUID().toString(), val name: String, val host: String, val httpPort: Int = 8080, val dest: String = "/data/pkg")
+data class Ps4(val id: String = UUID.randomUUID().toString(), val name: String, val host: String, val httpPort: Int = 8080, val dest: String = "/data/pkg", val token: String = "")
 
 enum class Link(private val en: String, private val ar: String) {
     UNKNOWN("Not checked", "لم يُفحص"), AVAILABLE("Available", "متاح"), UNAVAILABLE("Unavailable", "غير متاح");

@@ -28,6 +28,12 @@ object Tx {
         "That is not a valid http(s) link." to "هذا ليس رابط http(s) صالحًا.",
         "This PS4 has no IP address yet." to "لا يوجد عنوان IP لهذا الـPS4.",
         "Download not found." to "التحميل غير موجود.",
+        "The server asks for a token. Enter it in this PS4's settings in the app." to "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.",
+        "Could not change the setting on the server." to "تعذّر تغيير الإعداد على الخادم.",
+        "No such file or folder" to "لا يوجد ملف أو مجلد بهذا الاسم",
+        "Destination already exists" to "الوجهة موجودة بالفعل",
+        "Path is outside the allowed folders (fs_roots)" to "المسار خارج المجلدات المسموحة",
+        "File API is disabled (fs_roots is empty)" to "واجهة الملفات معطّلة على الخادم",
         "Downloads do not need ezRemote web with the custom server (the PS4 suspends ezRemote while a game runs). Files and covers do." to
             "التحميل لا يحتاج ويب ezRemote مع الخادم المخصص (الـPS4 يعلّق ezRemote أثناء تشغيل لعبة). أما الملفات والأغلفة فتحتاجه.",
         "That PS4 profile no longer exists." to "ملف هذا الـPS4 لم يعد موجودًا.",

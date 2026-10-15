@@ -125,10 +125,11 @@ import kotlinx.coroutines.withContext
     var host by remember { mutableStateOf(existing?.host.orEmpty()) }
     var http by remember { mutableStateOf((existing?.httpPort ?: 8080).toString()) }
     var dest by remember { mutableStateOf(existing?.dest ?: "/data/pkg") }
+    var token by remember { mutableStateOf(existing?.token.orEmpty()) }
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest))
+    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest), token = token.trim())
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         BackHeader(if (isNew) tr("Add PS4", "إضافة PS4") else tr("Edit PS4", "تعديل PS4"), nav)
         val full = Modifier.fillMaxWidth()
@@ -136,11 +137,12 @@ import kotlinx.coroutines.withContext
         OutlinedTextField(host, { host = it }, label = { Text(tr("PS4 IP address / host", "عنوان IP للـPS4")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
         OutlinedTextField(http, { http = it }, label = { Text(tr("ezRemote web port (default 8080)", "منفذ ويب ezRemote (الافتراضي 8080)")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         OutlinedTextField(dest, { dest = it }, label = { Text(tr("Default download folder", "مجلد التحميل الافتراضي")) }, singleLine = true, modifier = full)
+        OutlinedTextField(token, { token = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("Server token (only if you set one on the server)", "رمز الخادم (فقط إن وضعت رمزًا على الخادم)")) }, singleLine = true, modifier = full)
         if (busy) LinearProgressIndicator(full)
         if (result.isNotEmpty()) Text(Tx.lines(result), fontWeight = FontWeight.SemiBold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !busy && host.isNotBlank(), onClick = { busy = true; result = ""; scope.launch { result = DownloadMonitor.probe(build()); busy = false } }) { Lbl(tr("Test connection", "اختبار الاتصال")) }
-            Button(enabled = host.isNotBlank(), onClick = { Ps4Repo.save(build()); nav.popBackStack() }) { Lbl(tr("Save", "حفظ")) }
+            Button(enabled = host.isNotBlank(), onClick = { val np = build(); Ps4Repo.save(np); EzServer.forget(np); nav.popBackStack() }) { Lbl(tr("Save", "حفظ")) }
         }
         if (!isNew) {
             val inUse = DownloadRepo.all.value.any { it.ps4Id == existing!!.id && it.state.active }

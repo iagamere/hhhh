@@ -192,6 +192,7 @@ object Notifier {
             .setAutoCancel(true).setContentIntent(pi()).setCategory(NotificationCompat.CATEGORY_ERROR).setPriority(NotificationCompat.PRIORITY_HIGH)
         cover(d)?.let { b.setLargeIcon(it) }
         CoverColor.forDownload(d)?.let { b.setColor(it) }
+        styleStatus(b, d, tr("Download interrupted", "انقطع التحميل") + " • " + tr("$mins min", "$mins د") + (if (at.isNotEmpty()) " • $at" else ""), why, d.frac ?: 0f, true)
         return b.build()
     }
 
@@ -217,10 +218,40 @@ object Notifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText("$head\n$body")).setAutoCancel(true).setContentIntent(pi())
         cover(d)?.let { b.setLargeIcon(it) }
         CoverColor.forDownload(d)?.let { b.setColor(it) }
+        styleStatus(b, d, head, body, if (ok) 1f else (d.frac ?: 0f), !ok)
         releaseSession(d.notificationId)
         post(d.notificationId, b.build())
         post(2, NotificationCompat.Builder(ctx, "done").setSmallIcon(R.drawable.ic_stat_ps4).setGroup("ps4_done").setGroupSummary(true)
             .setContentTitle(tr("PS4 downloads", "تحميلات PS4")).setAutoCancel(true).setContentIntent(pi()).build())
+    }
+
+    /**
+     * "Finished" and "interrupted" notifications in the same look as the download cards: cover colour background, cover, name, text, bar.
+     * Reuses the collapsed card layout with its two buttons hidden; the expanded form lets the text wrap over several lines.
+     * Any failure here leaves the plain notification as it was.
+     */
+    private fun styleStatus(b: NotificationCompat.Builder, d: Download, head: String, line: String, frac: Float, warn: Boolean) {
+        try {
+            val pal = palette(d)
+            fun view(lines: Int): RemoteViews {
+                val rv = RemoteViews(ctx.packageName, if (FULL_BLEED) R.layout.notif_dl_collapsed_fb else R.layout.notif_dl_collapsed)
+                rv.setInt(R.id.bg, "setColorFilter", pal.surface)
+                rv.setImageViewBitmap(R.id.cover, coverBitmap(d, pal))
+                rv.setTextViewText(R.id.title, gameTitle(d)); rv.setTextColor(R.id.title, pal.onSurface)
+                rv.setTextViewText(R.id.stats, "$head\n$line".trim()); rv.setTextColor(R.id.stats, if (warn) pal.warn else pal.onSurfaceVariant)
+                rv.setInt(R.id.stats, "setMaxLines", lines)
+                rv.setProgressBar(R.id.bar, 1000, (frac * 1000f).toInt().coerceIn(0, 1000), false)
+                if (Build.VERSION.SDK_INT >= 31) {
+                    rv.setColorStateList(R.id.bar, "setProgressTintList", ColorStateList.valueOf(if (warn) pal.warn else pal.accent))
+                    rv.setColorStateList(R.id.bar, "setProgressBackgroundTintList", ColorStateList.valueOf(pal.track))
+                }
+                rv.setViewVisibility(R.id.ib_toggle, android.view.View.GONE)
+                rv.setViewVisibility(R.id.ib_delete, android.view.View.GONE)
+                return rv
+            }
+            b.setColor(pal.accentText).setCustomContentView(view(1)).setCustomBigContentView(view(6))
+            b.setStyle(if (FULL_BLEED) null else NotificationCompat.DecoratedCustomViewStyle())
+        } catch (e: Exception) { DownloadMonitor.d("Status notification styling failed: ${e.javaClass.simpleName}") }
     }
 
     private fun cancelAlert(id: Int) { runCatching { NotificationManagerCompat.from(ctx).cancel(id + ALERT_BASE) } }
@@ -392,7 +423,6 @@ object Notifier {
         val pal = palette(d)
         val t = cardTexts(d)
         val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setGroup("ps4_dl_${d.notificationId}")      // a group key of its own per card (and no summary): the system must not bundle two cards under one grey app header
             .setSmallIcon(R.drawable.ic_stat_ps4)
             // plain title / text: not drawn (the custom views are), but used by accessibility, the lock screen and watches
             .setContentTitle(gameTitle(d)).setContentText(t.line).setSubText(t.sub.ifEmpty { null })
@@ -461,7 +491,6 @@ object Notifier {
         val text = if (confirm) tr("Tap the bin again to delete this download and its file", "اضغط سلة المهملات مرة أخرى لحذف التحميل وملفه")
                    else listOfNotNull(t.line, t.speed).joinToString(" • ")
         val b = Notification.Builder(ctx, DL_CHANNEL).setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setGroup("ps4_dl_${d.notificationId}")      // a group key of its own per card (and no summary): the system must not bundle two cards under one grey app header
             .setSmallIcon(R.drawable.ic_stat_ps4)
             .setContentTitle(gameTitle(d)).setContentText(text).setSubText(t.sub.ifEmpty { null })
             .setOngoing(!paused).setOnlyAlertOnce(true).setShowWhen(false).setContentIntent(pi())

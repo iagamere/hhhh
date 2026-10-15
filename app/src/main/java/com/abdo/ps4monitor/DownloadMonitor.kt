@@ -129,7 +129,26 @@ object DownloadMonitor {
     }
 
     /** The server's live entry for [path] when the custom server (/v2 API) is running; null for an original server or when unreachable. */
-    private fun v2Live(p: Ps4, path: String): SrvEntry? = try {
+    /** Queue control (custom server only). action: now | top | bottom | up | down | prio (with [prio]). Returns the text to show. */
+    suspend fun queueAction(id: String, action: String, prio: Int = 0): String = withContext(Dispatchers.IO) {
+        val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
+        val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
+        val path = dl.path ?: return@withContext tr("This download has no file path.", "هذا التحميل بلا مسار ملف.")
+        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
+        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
+        val live = v2Live(p, path) ?: return@withContext tr("Queue control needs the custom ezRemote Server and a reachable PS4.", "التحكم بالطابور يحتاج خادم ezRemote المخصص وجهازًا متاحًا.")
+        val c = when (action) {
+            "now" -> EzServer.startNow(p, live.id)
+            "prio" -> EzServer.setPriority(p, live.id, prio)
+            else -> EzServer.move(p, live.id, action)
+        }
+        if (!c.ok) return@withContext tr("Could not change the queue: ", "تعذّر تغيير الطابور: ") + Tx.t(c.message)
+        if (action == "now" && dl.state == DlState.PAUSED) DownloadRepo.update(id) { it.copy(state = DlState.QUEUED, note = "Resuming…", errorMessage = null, terminalNotified = false) }
+        d("${dl.displayName}: queue action $action" + if (action == "prio") " $prio" else "")
+        tr("Done.", "تم.")
+    }
+
+    fun v2Live(p: Ps4, path: String): SrvEntry? = try {
         if (EzServer.isV2(p, 4000)) EzServer.newest(EzServer.list(p, 4000), path)?.takeIf { it.v2 && it.id > 0 } else null
     } catch (e: Exception) { null }
 
@@ -343,6 +362,8 @@ object DownloadMonitor {
         val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
         val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
         val path = dl.path ?: return@withContext tr("This download has no file path, so it cannot be paused.", "هذا التحميل بلا مسار ملف لذلك لا يمكن إيقافه مؤقتًا.")
+        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
+        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
         v2Live(p, path)?.let { live ->
             val c = EzServer.pause(p, live.id)
             if (!c.legacy) {
@@ -368,6 +389,8 @@ object DownloadMonitor {
         val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
         val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
         val path = dl.path ?: return@withContext tr("This download has no file path.", "هذا التحميل بلا مسار ملف.")
+        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
+        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
         v2Live(p, path)?.let { live ->
             val c = EzServer.resume(p, live.id)
             if (!c.legacy) {
@@ -399,6 +422,7 @@ object DownloadMonitor {
         val p = Ps4Repo.get(dl.ps4Id); val path = dl.path
         val parts = ArrayList<String>()
         var v2Done = false
+        if (p != null) { try { EzServer.isV2(p, 3000) } catch (e: Exception) { }; if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.") }
         if (p != null && path != null) {
             v2Live(p, path)?.let { live ->
                 val c = EzServer.delete(p, live.id, deleteFiles)
@@ -465,6 +489,7 @@ object DownloadMonitor {
         val s = Store.settings(); val parts = ArrayList<String>()
         var webOk = false; var srv: List<SrvEntry>? = null
         try { EzRemote.list(p, norm(p.dest), s.timeout * 1000); webOk = true; parts += "ezRemote web: OK" } catch (e: Exception) { d("Probe web: ${e.javaClass.simpleName}: ${e.message}"); parts += "ezRemote web: " + EzRemote.friendly(e) }
+        EzServer.forget(p)
         try { srv = EzServer.list(p, 4000); parts += "ezRemote Server: OK" + if (EzServer.isV2Known(p)) " (custom build, /v2)" else "" } catch (e: Exception) { d("Probe server: ${e.javaClass.simpleName}"); parts += "ezRemote Server: not reachable (is it running? port 6701)" }
         if (!webOk && srv != null && EzServer.isV2Known(p)) parts += "Downloads do not need ezRemote web with the custom server (the PS4 suspends ezRemote while a game runs). Files and covers do."
         upStatus(p.id) { it.copy(web = if (webOk) Link.AVAILABLE else Link.UNAVAILABLE, bg = if (srv != null) Link.AVAILABLE else Link.UNAVAILABLE) }

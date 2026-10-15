@@ -22,7 +22,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable fun DownloadsScreen(nav: NavController) {
     val all by DownloadRepo.all.collectAsState()
@@ -120,6 +123,34 @@ import kotlinx.coroutines.launch
             d.path?.let { Dim(tr("File: ", "الملف: ") + it) }
             if (d.sourceUrl.isNotBlank()) Dim(tr("Link: ", "الرابط: ") + d.sourceUrl.take(120))
             Dim(tr("Sent: ", "أُرسل: ") + Fmt.dt(d.submittedAt) + "   " + tr("Finished: ", "انتهى: ") + Fmt.dt(d.completedAt))
+        }
+        // queue order and priority: only with the custom server, and only while the download is still on its list
+        val live by produceState<SrvEntry?>(null, d.id, d.state) {
+            while (ps4 != null && d.path != null && d.state != DlState.COMPLETED && d.state != DlState.FAILED) {
+                value = withContext(Dispatchers.IO) { DownloadMonitor.v2Live(ps4, d.path!!) }
+                delay(3000)
+            }
+            value = null
+        }
+        live?.let { q ->
+            fun act(a: String, prio: Int = 0) { scope.launch { Toast.makeText(ctx, DownloadMonitor.queueAction(d.id, a, prio), Toast.LENGTH_SHORT).show() } }
+            Panel {
+                SectionTitle(tr("Queue", "الطابور"))
+                Dim(tr("Position ", "الترتيب ") + "${q.position + 1}  •  " + tr("priority ", "الأولوية ") + q.priority)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { act("now") }) { Lbl(tr("Start now", "ابدأ الآن")) }
+                    FilledTonalButton(onClick = { act("top") }) { Lbl(tr("To top", "للأعلى")) }
+                    FilledTonalButton(onClick = { act("up") }) { Lbl(tr("Up", "أعلى")) }
+                    FilledTonalButton(onClick = { act("down") }) { Lbl(tr("Down", "أسفل")) }
+                    FilledTonalButton(onClick = { act("bottom") }) { Lbl(tr("To bottom", "للأسفل")) }
+                }
+                Dim(tr("Priority (higher goes first):", "الأولوية (الأعلى أولًا):"))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(50 to tr("High", "عالية"), 0 to tr("Normal", "عادية"), -50 to tr("Low", "منخفضة")).forEach { (v, label) ->
+                        FilterChip(selected = q.priority == v, onClick = { act("prio", v) }, label = { Lbl(label) })
+                    }
+                }
+            }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (d.state.active && d.state != DlState.SUBMITTING) FilledTonalButton(onClick = { pause = true }) { Ico(R.drawable.ic_pause, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Pause", "إيقاف مؤقت")) }
