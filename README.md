@@ -1,4 +1,4 @@
-# PS4 Download Monitor 5.1
+# PS4 Download Monitor 5.2
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 
@@ -18,6 +18,13 @@ Files: Models, Store, EzRemote (client API), EzServer (+ BgHistory), DownloadMon
 Names, Fmt, Lang, and the UI (MainActivity, Ui, HomeUi, DownloadsUi, FilesUi, PkgUi, BrowserUi, SettingsUi).
 Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link, upload, text editor, save-to-phone, image preview,
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
+
+## 5.2 (goes with ezRemote Server 2.0.0-abdo11): server choice + built-in Builder
+- The Home card now shows **Server in use** (Original ezRemote / Our server + version). Tap it to choose: **Original**, **Our server** (abdo11 is bundled inside the app, no separate download) or **Build a server from my zip** (the PS4 Builder flow: the zip is built on GitHub Actions, the ELF is downloaded and sent to the PS4).
+- PS4 Builder is no longer needed as a separate app.
+- Sending retries by itself when the old server still answers, and a server that was already running is not mistaken for the new one.
+- Choosing Original stops our server and forgets the saved ELF (otherwise the monitor would re-send it). Getting the original back may need "restart server" in ezRemote Client on the PS4: NOT verified.
+- The build token is embedded in the app (scrambled, not secret: anyone can unpack the APK). NOT compiled or tested on a device.
 
 ## 5.1 (goes with ezRemote Server 2.0.0-abdo10): PS4 information
 - New card on the Home screen opens **PS4 information**: screenshots and videos (thumbnails, full view, save to phone), storage (free/used per volume), installed games (title, id, version, icon from param.sfo) and device details (from the console's sysctl). Everything is read through ezRemote Server, so it works while a game runs.

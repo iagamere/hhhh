@@ -14,7 +14,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.graph.findStartDestination().id) { saveState = true }; launchSingleTop = true; restoreState = true }
 
@@ -41,6 +43,14 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
     var resumeId by remember { mutableStateOf<String?>(null) }
     fun refresh() { val p = ps4 ?: return; probing = true; scope.launch { probeMsg = DownloadMonitor.probe(p); probing = false } }
     LaunchedEffect(ps4?.id) { if (ps4 != null) refresh() }
+    var srvInfo by remember { mutableStateOf<EzServer.ServerInfo?>(null) }
+    var srvChecked by remember { mutableStateOf(false) }
+    var srvTick by remember { mutableIntStateOf(0) }
+    var showPicker by remember { mutableStateOf(false) }
+    LaunchedEffect(ps4?.id, probing, srvTick) {
+        val p = ps4 ?: return@LaunchedEffect
+        if (!probing) { srvInfo = withContext(Dispatchers.IO) { EzServer.info(p, 3000) }; srvChecked = true }
+    }
 
     val mine = dls.filter { it.ps4Id == ps4?.id }
     val active = mine.filter { it.state.active }
@@ -70,6 +80,23 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
                             }
                         }
                         Text(tr("ezRemote web", "ويب ezRemote") + ": ${st.web.label}   •   " + tr("ezRemote Server", "خادم ezRemote") + ": ${st.bg.label}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                        val srvName = when {
+                            !srvChecked -> tr("checking…", "جارٍ الفحص…")
+                            srvInfo == null -> tr("not reachable", "غير متاح")
+                            srvInfo!!.locked -> tr("custom (token required)", "مخصص (يطلب رمزًا)")
+                            srvInfo!!.custom -> tr("Our server ", "سيرفرنا ") + srvInfo!!.version
+                            else -> tr("Original ezRemote", "ezRemote الأصلي")
+                        }
+                        Surface(onClick = { showPicker = true }, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    Dim(tr("Server in use", "السيرفر المستخدم"))
+                                    Text(srvName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Lbl(tr("Change", "تغيير"), color = MaterialTheme.colorScheme.primary)
+                                Ico(R.drawable.ic_arrow_forward, 18.dp, MaterialTheme.colorScheme.primary)
+                            }
+                        }
                         if (probing) LinearProgressIndicator(Modifier.fillMaxWidth())
                         else if (probeMsg.isNotBlank()) Text(Tx.lines(probeMsg), style = MaterialTheme.typography.bodySmall)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -110,6 +137,7 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
         if (recent.isNotEmpty()) item { SectionTitle(tr("Recent downloads", "آخر التحميلات")) }
         items(recent, key = { "r" + it.id }) { DownloadCard(it, { nav.navigate("downloads/${it.id}") }) }
     }
+    if (showPicker && ps4 != null) ServerPickerSheet(ps4, srvInfo, onDismiss = { showPicker = false }, onChanged = { srvTick++; refresh() })
     pauseId?.let { ConfirmPause(it) { pauseId = null } }
     resumeId?.let { ConfirmResume(it) { resumeId = null } }
 }
