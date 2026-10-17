@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 
 /**
- * Everything the "PS4" screen shows. All of it is read through ezRemote Server (/v2/fs/*, /v2/sysinfo), so it also works while a game is running.
+ * Everything the "PS4" screen shows. All of it is read through ezRemote Server (the /v2/fs routes and /v2/sysinfo), so it also works while a game is running.
  * NOTHING here is verified on a real console: the folder names below are the usual PS4 ones from public documentation, and the screen shows
  * a "Check paths" report so you can see exactly which of them the console answered.
  */
