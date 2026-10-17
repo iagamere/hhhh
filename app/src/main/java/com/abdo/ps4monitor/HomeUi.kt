@@ -89,6 +89,18 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
                 ActionTile(R.drawable.ic_folder, tr("Files", "الملفات"), Modifier.weight(1f)) { nav.navigate("files") }
             }
         }
+        item {
+            Card(onClick = { nav.navigate("ps4info") }, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Ico(R.drawable.ic_console, 30.dp, MaterialTheme.colorScheme.onTertiaryContainer)
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("PS4 information", "معلومات الـPS4"), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        Text(tr("Screenshots, videos, storage, installed games, device", "لقطات الشاشة، الفيديوهات، التخزين، الألعاب المثبتة، الجهاز"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                    }
+                    Ico(R.drawable.ic_arrow_forward, 22.dp, MaterialTheme.colorScheme.onTertiaryContainer)
+                }
+            }
+        }
         item { SectionTitle(tr("Active downloads", "التحميلات النشطة") + " (${active.size})") }
         if (active.isEmpty()) item { Dim(tr("Nothing is being downloaded.", "لا يوجد تحميل جارٍ.")) }
         items(active.take(3), key = { it.id }) { DownloadCard(it, { nav.navigate("downloads/${it.id}") }, onPause = { pauseId = it.id }) }

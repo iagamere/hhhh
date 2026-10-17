@@ -112,8 +112,8 @@ import kotlinx.coroutines.withContext
 
         Panel {
             SectionTitle(tr("Send the server to the PS4", "إرسال السيرفر إلى الـPS4"))
-            Dim(tr("Needs \"Enable BinLoader Server\" in GoldHEN settings (port 9090). Choose the .elf once; after that one tap sends it. Sending replaces the running ezRemote Server.",
-                "يحتاج تفعيل «Enable BinLoader Server» في إعدادات GoldHEN (المنفذ 9090). اختر ملف .elf مرة واحدة، وبعدها ضغطة واحدة ترسله. الإرسال يستبدل خادم ezRemote العامل."))
+            Dim(tr("Needs \"Enable PayLoader Server\" in GoldHEN settings (port 9090). Choose the .elf once; after that one tap sends it. Sending replaces the running ezRemote Server.",
+                "يحتاج تفعيل «Enable PayLoader Server» في إعدادات GoldHEN (المنفذ 9090). اختر ملف .elf مرة واحدة، وبعدها ضغطة واحدة ترسله. الإرسال يستبدل خادم ezRemote العامل."))
             Dim(if (hasElf) tr("Saved file: ${elf.length() / 1024} KB. The app re-sends it by itself if the server stops while downloads are unfinished.",
                     "الملف المحفوظ: ${elf.length() / 1024} KB. يعيد التطبيق إرساله تلقائيًا إذا توقف السيرفر وفيه تحميلات غير مكتملة.")
                 else tr("No file chosen yet.", "لم يُختر ملف بعد."))

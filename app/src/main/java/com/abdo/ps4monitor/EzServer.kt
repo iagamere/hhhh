@@ -34,7 +34,7 @@ class SrvEntry(val path: String, val bytes: Long, val size: Long, val state: Int
 object EzServer {
     const val PORT = 6701
     class Reply(val code: Int, val body: String)
-    private class V2Info(val ok: Boolean, val at: Long, val maxAttempts: Int, val fsRoots: List<String> = emptyList(), val fsApi: Int = 0)
+    private class V2Info(val ok: Boolean, val at: Long, val maxAttempts: Int, val fsRoots: List<String> = emptyList(), val fsApi: Int = 0, val roRoots: List<String> = emptyList())
     private val v2cache = ConcurrentHashMap<String, V2Info>()
     private val locked = ConcurrentHashMap<String, Boolean>()
     /** The server answered 401: it has a token and this app has none (or a wrong one). */
@@ -45,7 +45,7 @@ object EzServer {
         if (ps4.token.isNotEmpty()) c.setRequestProperty("X-Token", ps4.token)
         return c
     }
-    private fun rootsOf(st: JSONObject?): List<String> = st?.optJSONArray("fs_roots")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.startsWith("/") } } ?: emptyList()
+    private fun rootsOf(st: JSONObject?, key: String = "fs_roots"): List<String> = st?.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.startsWith("/") } } ?: emptyList()
 
     private fun call(ps4: Ps4, method: String, path: String, body: String?, timeoutMs: Int): Reply {
         val c = open(ps4, method, path, timeoutMs)
@@ -83,7 +83,12 @@ object EzServer {
         if (ok && fsApi >= 1 && roots.isEmpty() && Store.sp.getBoolean("fs_auto", true)) {
             enableFs(ps4, true)?.let { roots = it; DownloadMonitor.d("File access through the server enabled for: " + it.joinToString()) }
         }
-        v2cache[ps4.id] = V2Info(ok, now, maxAtt, roots, fsApi)
+        var ro = rootsOf(st, "fs_ro_roots")
+        // read-only folders (captures, installed games): pushed once; the user's extra folders are added to the defaults
+        if (ok && fsApi >= 2 && ro.isEmpty() && Store.sp.getBoolean("ro_auto", true)) {
+            pushRo(ps4)?.let { ro = it; DownloadMonitor.d("Read-only folders enabled on the server: " + it.joinToString()) }
+        }
+        v2cache[ps4.id] = V2Info(ok, now, maxAtt, roots, fsApi, ro)
         return ok
     }
     /** What the last check found; never touches the network. */
@@ -125,7 +130,8 @@ object EzServer {
 
     // ---------------- status / settings / log of the custom server ----------------
     class ServerInfo(val version: String, val custom: Boolean, val maxParallel: Int, val maxConns: Int, val auto: Boolean, val fixedConns: Int,
-                     val fsRoots: List<String> = emptyList(), val fsApi: Int = 0, val tokenSet: Boolean = false, val locked: Boolean = false)
+                     val fsRoots: List<String> = emptyList(), val fsApi: Int = 0, val tokenSet: Boolean = false, val locked: Boolean = false,
+                     val roRoots: List<String> = emptyList())
     /** null = not reachable. An original server answers 404 to /v2/info. */
     fun info(ps4: Ps4, timeoutMs: Int = 3000): ServerInfo? = try {
         val r = call(ps4, "GET", "/v2/info", null, timeoutMs)
@@ -135,7 +141,7 @@ object EzServer {
             val st = j.optJSONObject("settings")
             ServerInfo(j.optString("version"), true, st?.optInt("max_parallel", 2) ?: 2, st?.optInt("max_conns_per_download", 8) ?: 8,
                 st?.optBoolean("auto_conns", true) ?: true, st?.optInt("fixed_conns", 4) ?: 4,
-                rootsOf(st), j.optInt("fs_api"), st?.optBoolean("token_set", false) ?: false)
+                rootsOf(st), j.optInt("fs_api"), st?.optBoolean("token_set", false) ?: false, roRoots = rootsOf(st, "fs_ro_roots"))
         } else if (r.code == 404) ServerInfo("original", false, 1, 1, false, 1)
         else null
     } catch (e: Exception) { null }
@@ -218,12 +224,14 @@ object EzServer {
     /** Sets (or clears, with "") the token the server requires. The app must send the NEW value from then on: the caller saves it. */
     fun setServerToken(ps4: Ps4, token: String): Ctl = control(ps4, "/v2/settings", JSONObject().put("token", token).toString())
 
-    fun fsUsable(ps4: Ps4, path: String): Boolean {
+    /** write = false also accepts the server's read-only folders (list / stat / read). */
+    fun fsUsable(ps4: Ps4, path: String, write: Boolean = true): Boolean {
         val now = System.currentTimeMillis()
         if (now - (fsFailAt[ps4.id] ?: 0L) < 10_000L) return false
         val ok = try { isV2(ps4, 2500) } catch (e: Exception) { fsFailAt[ps4.id] = now; false }
         if (!ok) return false
-        val roots = v2cache[ps4.id]?.fsRoots.orEmpty()
+        val c = v2cache[ps4.id]
+        val roots = c?.fsRoots.orEmpty() + (if (write) emptyList<String>() else c?.roRoots.orEmpty())
         return roots.any { path == it || path.startsWith("$it/") }
     }
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
@@ -270,6 +278,54 @@ object EzServer {
     fun fsOp(ps4: Ps4, op: String, body: JSONObject): EzRemote.OpResult = try {
         fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), 60_000); EzRemote.OpResult(true, "")
     } catch (e: EzError) { EzRemote.OpResult(false, e.message ?: "ezRemote Server refused the request.") }
+
+    // ---------------- read-only folders, space, system info (server abdo10, fs_api 2) ----------------
+    val RO_DEFAULT = listOf("/user/av_contents", "/user/app", "/user/appmeta", "/system_data/priv/appmeta")
+    /** Extra read-only folders typed by the user (one per line in the preferences). */
+    fun roExtra(): List<String> = (Store.sp.getString("ro_extra", "") ?: "").lines().map { it.trim().trimEnd('/') }.filter { it.startsWith("/") && it.length > 1 && !it.contains("..") }.distinct()
+    fun roWanted(): List<String> = (RO_DEFAULT + roExtra()).distinct()
+    private fun pushRo(ps4: Ps4): List<String>? = try {
+        val arr = JSONArray(); roWanted().forEach { arr.put(it) }
+        val r = call(ps4, "POST", "/v2/settings", JSONObject().put("fs_ro_roots", arr).toString(), 4000)
+        if (r.code in 200..299) rootsOf(JSONObject(r.body).optJSONObject("settings"), "fs_ro_roots") else null
+    } catch (e: Exception) { null }
+    /** Saves the extra folders and sends the full list to the server. Null = done, otherwise an error text. */
+    fun setRoExtra(ps4: Ps4, lines: String): String? {
+        Store.sp.edit().putString("ro_extra", lines).putBoolean("ro_auto", true).apply()
+        val roots = pushRo(ps4)
+        forget(ps4)
+        return if (roots == null) "Could not change the setting on the server." else null
+    }
+    /** Makes sure the server is the custom build with fs_api >= 2 and the read-only folders are set. Null = ready, otherwise an English reason (see Tx). */
+    fun prepareInfo(ps4: Ps4): String? {
+        forget(ps4)
+        val i = info(ps4, 4000) ?: return "ezRemote Server is not running. Launch ezRemote on the PS4."
+        if (i.locked) return "The server asks for a token. Enter it in this PS4's settings."
+        if (!i.custom) return "This feature needs the custom server (abdo10 or newer)."
+        if (i.fsApi < 2) return "The server is too old for this feature: send the abdo10 server from the Server screen."
+        val ok = try { isV2(ps4, 4000) } catch (e: Exception) { false }
+        if (!ok) return "ezRemote Server is not running. Launch ezRemote on the PS4."
+        if (v2cache[ps4.id]?.roRoots.isNullOrEmpty() && v2cache[ps4.id]?.fsRoots.isNullOrEmpty()) return "File access through the server is switched off (Server screen)."
+        return null
+    }
+    fun roRoots(ps4: Ps4): List<String> = v2cache[ps4.id]?.roRoots.orEmpty()
+    fun fsRootsKnown(ps4: Ps4): List<String> = v2cache[ps4.id]?.fsRoots.orEmpty()
+    /** (total, free) bytes of the volume that holds [path]. */
+    fun fsSpace(ps4: Ps4, path: String, timeoutMs: Int): Pair<Long, Long> {
+        val j = fsCall(ps4, "GET", "/v2/fs/space?path=" + enc(path), null, timeoutMs)
+        return j.optLong("total") to j.optLong("free")
+    }
+    /** What the console's kernel reports (only names that exist are returned). Null = not available. */
+    fun sysinfo(ps4: Ps4): JSONObject? = try { fsCall(ps4, "GET", "/v2/sysinfo", null, 5000) } catch (e: Exception) { null }
+    /** Streams a whole file into [out] in 4 MiB pieces. [size] must be the real size (from stat). */
+    fun fsCopyTo(ps4: Ps4, path: String, size: Long, out: java.io.OutputStream, onProgress: (Long) -> Unit) {
+        var off = 0L
+        while (off < size) {
+            val chunk = fsRead(ps4, path, off, 4 shl 20, 30_000)
+            if (chunk.isEmpty()) throw EzError("The PS4 stopped sending the file at $off of $size bytes.")
+            out.write(chunk); off += chunk.size; onProgress(off)
+        }
+    }
 
     fun pause(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/pause", "{\"id\":$id}")
     fun resume(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/resume", "{\"id\":$id}")

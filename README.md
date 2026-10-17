@@ -1,4 +1,4 @@
-# PS4 Download Monitor 5.0
+# PS4 Download Monitor 5.1
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 
@@ -18,6 +18,11 @@ Files: Models, Store, EzRemote (client API), EzServer (+ BgHistory), DownloadMon
 Names, Fmt, Lang, and the UI (MainActivity, Ui, HomeUi, DownloadsUi, FilesUi, PkgUi, BrowserUi, SettingsUi).
 Removed in 4.0: FTP, file-matching heuristics, Net size check, install-from-link, upload, text editor, save-to-phone, image preview,
 artwork scan, history screen, auto-rename/auto-install, adoption toggle, "stop monitoring", speed chart, untracked .tmp list, events list.
+
+## 5.1 (goes with ezRemote Server 2.0.0-abdo10): PS4 information
+- New card on the Home screen opens **PS4 information**: screenshots and videos (thumbnails, full view, save to phone), storage (free/used per volume), installed games (title, id, version, icon from param.sfo) and device details (from the console's sysctl). Everything is read through ezRemote Server, so it works while a game runs.
+- Needs the abdo10 server. The app sends it read-only folders (`/user/av_contents`, `/user/app`, `/user/appmeta`, `/system_data/priv/appmeta`) once; the Device tab lets you add more and has **Check paths**, which shows which folders the console actually answered.
+- NOT verified on a console: these folder names come from public documentation. If a tab is empty, use Check paths and add the right folder.
 
 ## 5.0 (goes with ezRemote Server 2.0.0-abdo9)
 - Queue control (custom server): download details show position and priority, with Start now / To top / Up / Down / To bottom and High / Normal / Low priority (`/v2/start_now`, `/v2/move`, `/v2/priority`).

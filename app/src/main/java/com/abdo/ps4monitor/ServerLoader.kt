@@ -26,7 +26,7 @@ object ServerLoader {
         } catch (e: Exception) { return EzRemote.friendly(e) }
     }
 
-    /** Null = sent. Needs "Enable BinLoader Server" in GoldHEN's settings. */
+    /** Null = sent. Needs "Enable PayLoader Server" in GoldHEN's settings. */
     fun send(host: String, file: File, onProgress: (Int) -> Unit): String? {
         try {
             Socket().use { s ->
