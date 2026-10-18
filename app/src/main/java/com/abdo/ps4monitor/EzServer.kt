@@ -311,7 +311,7 @@ object EzServer {
     }
 
     // ---------------- read-only folders, space, system info (server abdo10, fs_api 2) ----------------
-    val RO_DEFAULT = listOf("/user/av_contents", "/user/app", "/user/appmeta", "/system_data/priv/appmeta", "/user/home", "/system_data/priv/home", "/user/theme", "/user/themes", "/system_data/priv/theme", "/system_data/theme", "/system_ex/theme", "/user/system/theme")
+    val RO_DEFAULT = listOf("/system_data/priv/cache/profile", "/user/av_contents", "/user/app", "/user/appmeta", "/system_data/priv/appmeta", "/user/home", "/system_data/priv/home", "/user/theme", "/user/themes", "/system_data/priv/theme", "/system_data/theme", "/system_ex/theme", "/user/system/theme")
     /** Extra read-only folders typed by the user (one per line in the preferences). */
     fun roExtra(): List<String> = (Store.sp.getString("ro_extra", "") ?: "").lines().map { it.trim().trimEnd('/') }.filter { it.startsWith("/") && it.length > 1 && !it.contains("..") }.distinct()
     fun roWanted(): List<String> = (RO_DEFAULT + roExtra()).distinct()

@@ -86,7 +86,7 @@ object Notifier {
         val s = when (d.state) {
             DlState.DOWNLOADING -> listOfNotNull(d.pct?.let { "$it%" }, Fmt.mbs(d.speed)).joinToString(" • ")
             DlState.STALLED -> tr("stalled", "متعثّر")
-            DlState.SERVER_DOWN -> tr("server not reachable", "الخادم غير متاح")
+            DlState.SERVER_DOWN -> if (DownloadMonitor.status.value[d.ps4Id]?.power == Power.REST) tr("PS4 in rest mode", "الـPS4 في وضع الراحة") else tr("server not reachable", "الخادم غير متاح")
             DlState.QUEUED -> tr("queued", "في الانتظار")
             else -> d.state.label
         }
@@ -181,7 +181,9 @@ object Notifier {
     }
     private fun alertNotification(d: Download, trouble: Long): Notification {
         val mins = (trouble / 60_000L).coerceAtLeast(1L)
-        val why = if (d.state == DlState.SERVER_DOWN)
+        val why = if (d.state == DlState.SERVER_DOWN && DownloadMonitor.status.value[d.ps4Id]?.power == Power.REST)
+            tr("The PS4 is in rest mode and ezRemote Server is not answering. Wake the PS4 from the app.", "الـPS4 في وضع الراحة وخادم ezRemote لا يستجيب. أيقظ الـPS4 من التطبيق.")
+        else if (d.state == DlState.SERVER_DOWN)
             tr("ezRemote Server on the PS4 is not answering (the PS4 may be asleep, or the server stopped).", "خادم ezRemote على الـPS4 لا يستجيب (قد يكون الجهاز في وضع الراحة أو توقف الخادم).")
         else tr("No download progress is being made.", "لا يوجد تقدّم في التحميل.")
         val at = listOfNotNull(d.pct?.let { "$it%" }, if (d.currentSize > 0) Fmt.gb(d.currentSize) else null).joinToString(" • ")

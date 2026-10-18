@@ -39,6 +39,8 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
     var probing by remember { mutableStateOf(false) }
     var probeMsg by remember { mutableStateOf("") }
     var pick by remember { mutableStateOf(false) }
+    var waking by remember { mutableStateOf(false) }
+    var wakeMsg by remember { mutableStateOf("") }
     var pauseId by remember { mutableStateOf<String?>(null) }
     var resumeId by remember { mutableStateOf<String?>(null) }
     fun refresh() { val p = ps4 ?: return; probing = true; scope.launch { probeMsg = DownloadMonitor.probe(p); probing = false } }
@@ -97,10 +99,14 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
                                 Ico(R.drawable.ic_arrow_forward, 18.dp, MaterialTheme.colorScheme.primary)
                             }
                         }
+                        Text(tr("PS4 power", "حالة الـPS4") + ": ${st.power.label}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                        if (waking) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                        if (wakeMsg.isNotBlank()) Text(wakeMsg, style = MaterialTheme.typography.bodySmall)
                         if (probing) LinearProgressIndicator(Modifier.fillMaxWidth())
                         else if (probeMsg.isNotBlank()) Text(Tx.lines(probeMsg), style = MaterialTheme.typography.bodySmall)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Button(enabled = !probing, onClick = { refresh() }) { Ico(R.drawable.ic_refresh, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Refresh", "تحديث")) }
+                            if (st.power == Power.REST || st.power == Power.OFF) FilledTonalButton(enabled = !waking, onClick = { waking = true; wakeMsg = ""; scope.launch { wakeMsg = DownloadMonitor.wakePs4(ps4); waking = false; refresh() } }) { Lbl(tr("Wake PS4", "إيقاظ الـPS4")) }
                             FilledTonalButton(onClick = { nav.navigate("settings/ps4/${ps4.id}") }) { Lbl(tr("Edit", "تعديل")) }
                             FilledTonalButton(onClick = { nav.navigate("settings/ps4/new") }) { Ico(R.drawable.ic_add, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Add PS4", "إضافة PS4")) }
                         }

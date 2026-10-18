@@ -126,6 +126,8 @@ import kotlinx.coroutines.withContext
     var http by remember { mutableStateOf((existing?.httpPort ?: 8080).toString()) }
     var dest by remember { mutableStateOf(existing?.dest ?: "/data/pkg") }
     var token by remember { mutableStateOf(existing?.token.orEmpty()) }
+    var wakeKey by remember { mutableStateOf(existing?.wakeKey.orEmpty()) }
+    var autoWake by remember { mutableStateOf(existing?.autoWake ?: false) }
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -146,7 +148,7 @@ import kotlinx.coroutines.withContext
         }
     }
     LaunchedEffect(Unit) { if (isNew && host.isBlank()) scan() }
-    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest), token = token.trim())
+    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest), token = token.trim(), wakeKey = wakeKey.trim(), autoWake = autoWake && wakeKey.isNotBlank())
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         BackHeader(if (isNew) tr("Add PS4", "إضافة PS4") else tr("Edit PS4", "تعديل PS4"), nav)
         val full = Modifier.fillMaxWidth()
@@ -170,6 +172,16 @@ import kotlinx.coroutines.withContext
         OutlinedTextField(http, { http = it }, label = { Text(tr("ezRemote web port (default 8080)", "منفذ ويب ezRemote (الافتراضي 8080)")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         OutlinedTextField(dest, { dest = it }, label = { Text(tr("Default download folder", "مجلد التحميل الافتراضي")) }, singleLine = true, modifier = full)
         OutlinedTextField(token, { token = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("Server token (only if you set one on the server)", "رمز الخادم (فقط إن وضعت رمزًا على الخادم)")) }, singleLine = true, modifier = full)
+        Panel {
+            Text(tr("Rest mode", "وضع الراحة"), fontWeight = FontWeight.SemiBold)
+            Dim(tr("The app already shows whether the PS4 is on or in rest mode. To also turn it on from the app, paste its wake key (user-credential of a registered Remote Play client). Optional.",
+                "التطبيق يعرض أصلاً هل الـPS4 يعمل أو في وضع الراحة. لتشغيله من التطبيق أيضاً، الصق مفتاح التشغيل (user-credential لعميل Remote Play مسجَّل). اختياري."))
+            OutlinedTextField(wakeKey, { wakeKey = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("Wake key (optional)", "مفتاح التشغيل (اختياري)")) }, singleLine = true, modifier = full)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Switch(autoWake && wakeKey.isNotBlank(), { autoWake = it }, enabled = wakeKey.isNotBlank())
+                Text(tr("Wake the PS4 by itself when it is in rest mode and a download is unfinished", "أيقظ الـPS4 تلقائياً إن كان في وضع الراحة وهناك تحميل غير مكتمل"), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         if (busy) LinearProgressIndicator(full)
         if (result.isNotEmpty()) Text(Tx.lines(result), fontWeight = FontWeight.SemiBold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

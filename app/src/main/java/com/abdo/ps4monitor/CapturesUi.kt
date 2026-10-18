@@ -69,11 +69,11 @@ private const val VTHUMB = 480    // video frame size
 }
 
 // ---------------------------------------------------------------- captures tab
-@Composable internal fun CapturesTab(ps4: Ps4, reload: Int) {
+@Composable internal fun CapturesTab(ps4: Ps4, reload: Int, onlyTitle: String? = null) {
     var scan by remember(ps4.id, reload) { mutableStateOf<CaptureScan?>(null) }
     var namesTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(ps4.id, reload) {
-        scan = null; scan = withContext(Dispatchers.IO) { Ps4Info.scanCaptures(ps4) }
+        scan = null; scan = withContext(Dispatchers.IO) { Ps4Info.scanCaptures(ps4) }.let { sc -> if (onlyTitle == null) sc else CaptureScan(sc.items.filter { it.titleId == onlyTitle }, sc.notes, sc.truncated) }
         // game names (for the captions) come from the games list; read it quietly once if the Games tab has not done it yet
         if (Ps4Info.names.isEmpty()) { withContext(Dispatchers.IO) { runCatching { Ps4Info.scanGames(ps4) } }; namesTick++ }
     }

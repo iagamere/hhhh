@@ -1,4 +1,20 @@
-# PS4 Download Monitor 5.4.1
+# PS4 Download Monitor 5.6
+
+## 5.6 game library (captures + trophies per game)
+- Tap a game: the sheet now has three tabs: **Details**, **Captures** (only that game's screenshots and videos, same viewer / save / delete as the Captures tab) and **Trophies**.
+- **Trophies:** a row of account circles (profile picture inside a progress ring, name and %). Tap an account for its progress (% of the game's trophies, counts per grade, points) and the list split into Earned / Not earned yet, with the trophy pictures, names, descriptions and dates. Hidden trophies stay hidden until earned.
+- Where each part comes from (`TrophyLib.kt`): accounts from /user/home + username.dat; avatar from /system_data/priv/cache/profile/<id>/avatar*.png (guess, falls back to the first letter); NPWR id from npbind.dat; trophy list/pictures from sce_sys/trophy/*.trp (documented layout).
+- NOT VERIFIED on a console: (1) where each account's unlocked trophies are stored. The reader searches /user/home/<id>/trophy for SQLite files and matches tables by column names; if nothing matches the screen says so and lists what it found (use Device > Scan trophies and send the result so the reader can be fixed). (2) Trophy names are plain XML only in some packs; when encrypted the trophies are numbered (pictures are real). (3) The profile-picture path.
+- NOT compiled.
+
+# PS4 Download Monitor 5.5
+
+## 5.5 rest mode
+- **The app now knows the console's power state** (Home card: "PS4 power": On / Rest mode / No answer), asked with DDP (UDP 987, no pairing). The PS4 answers it in rest mode when "Stay Connected to the Internet" and "Enable Turning on PS4 from Network" are on (Settings > Power Save Settings > Set Features Available in Rest Mode).
+- **Rest mode is no longer treated like a failure:** the download waits with the note "The PS4 is in rest mode...", polling continues, the alert says rest mode, and the download continues by itself when the server answers again.
+- **Wake PS4:** Home button (shown in rest mode / no answer). Needs the console's wake key ("user-credential" of a registered Remote Play client) pasted once in the PS4's settings. Optional switch: wake automatically while a download is unfinished (max 3 tries, 2 min apart).
+- Console on but server not running: the saved server file is re-sent after 15 s instead of 60 s.
+- LIMITS: whether ezRemote Server keeps running / downloading inside rest mode is decided by the console and the payload, not by this app (NOT verified). Wake packet NOT tested on a real console. NOT compiled.
 
 ## 5.4.1
 - Fixes the compile error in VideoStream.kt (wrong import of aspectRatio).

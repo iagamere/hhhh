@@ -212,6 +212,28 @@ object DownloadMonitor {
         return r
     }
 
+    // ---------------- rest mode ----------------
+    private val wakeTries = ConcurrentHashMap<String, Int>()
+    private val wakeAt = ConcurrentHashMap<String, Long>()
+    /** Optional: wakes a PS4 that is in rest mode while downloads are unfinished (at most 3 tries, 2 minutes apart, until it answers again). */
+    private suspend fun autoWake(p: Ps4, ds: List<Download>) {
+        if (!p.autoWake || p.wakeKey.isBlank() || ds.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if ((wakeTries[p.id] ?: 0) >= 3 || now - (wakeAt[p.id] ?: 0L) < 120_000L) return
+        wakeAt[p.id] = now; wakeTries.merge(p.id, 1) { a, b -> a + b }
+        d("PS4 is in rest mode with unfinished downloads: sending wake packet (${wakeTries[p.id]}/3)")
+        val err = Ps4Power.wake(p.host, p.wakeKey, 20_000L)
+        d(if (err == null) "PS4 woke up" else "Wake failed: $err")
+        if (err == null) kick()
+    }
+    /** Manual wake from the Home screen. Returns the text to show. */
+    suspend fun wakePs4(p: Ps4): String {
+        val err = Ps4Power.wake(p.host, p.wakeKey)
+        d(if (err == null) "PS4 woke up (manual)" else "Manual wake failed: $err")
+        if (err == null) { upStatus(p.id) { it.copy(power = Power.ON) }; kick() }
+        return Ps4Power.wakeMessage(err)
+    }
+
     // ---------------- polling loop ----------------
     private suspend fun loop(ps4Id: String) {
         var downSince = 0L
@@ -221,14 +243,26 @@ object DownloadMonitor {
             val s = Store.settings()
             val srv: List<SrvEntry>? = try { EzServer.list(p, 3000).also { upStatus(p.id) { it.copy(bg = Link.AVAILABLE) } } }      // the server answering says nothing about ezRemote web (port 8080)
                 catch (e: Exception) { upStatus(p.id) { it.copy(bg = Link.UNAVAILABLE) }; d("ezRemote Server (port 6701) not reachable: ${e.javaClass.simpleName}"); null }
+            // server silent: ask the console itself (DDP) whether it is in rest mode, off, or on without the server
+            val pw = if (srv != null) Power.ON else Ps4Power.probe(p.host)
+            val prevPw = status.value[p.id]?.power ?: Power.UNKNOWN
+            upStatus(p.id) { it.copy(power = pw) }
+            if (pw != prevPw) d("PS4 power state: ${pw.name}")
+            if (pw == Power.ON) wakeTries.remove(p.id)
+            if (srv == null && pw == Power.REST) autoWake(p, ds)
             val hist = lazy { BgHistory.cached(p) }
             for (d0 in ds) {
                 val x = DownloadRepo.get(d0.id) ?: continue
                 if (isWatch(x)) try { step(p, x, srv, hist, s) } catch (e: CancellationException) { throw e } catch (e: Exception) { d("Step error: ${e.javaClass.simpleName}: ${e.message}") }
             }
             if (srv != null) { downSince = 0L; adopt(p, srv, null) }
-            else if (downSince != 0L && System.currentTimeMillis() - downSince > 60_000L) tryHeal(p, System.currentTimeMillis())
-            else { if (downSince == 0L) downSince = System.currentTimeMillis(); upStatus(p.id) { it.copy(web = if (hist.value != null) Link.AVAILABLE else Link.UNAVAILABLE) } }
+            else {
+                if (downSince == 0L) downSince = System.currentTimeMillis()
+                // the console is on but the server is not running (typical right after waking from rest mode): restart it sooner
+                val limit = if (pw == Power.ON) 15_000L else 60_000L
+                if (System.currentTimeMillis() - downSince > limit) tryHeal(p, System.currentTimeMillis())
+                else upStatus(p.id) { it.copy(web = if (hist.value != null) Link.AVAILABLE else Link.UNAVAILABLE) }
+            }
             syncNotifs()
             val wait = if (srv != null) s.interval * 1000L else if (System.currentTimeMillis() - downSince > 300_000L) 30_000L else 10_000L
             withTimeoutOrNull(wait) { wake.first() }
@@ -289,6 +323,10 @@ object DownloadMonitor {
         if (h != null) {
             if (EzServer.sane(h.size)) setExpected(d0, h.size)
             if (h.stopped) { setState(d0, DlState.PAUSED, "Paused: ezRemote Server is not running and this download is marked stopped."); return }
+        }
+        if (status.value[p.id]?.power == Power.REST) {
+            setState(d0, DlState.SERVER_DOWN, "The PS4 is in rest mode and ezRemote Server is not answering. The app keeps watching and continues when the server answers again.")
+            return
         }
         setState(d0, DlState.SERVER_DOWN, if (hist.value != null) "ezRemote Server is not running. Launch ezRemote on the PS4." else "The PS4 is not reachable.")
     }
@@ -495,6 +533,10 @@ object DownloadMonitor {
         upStatus(p.id) { it.copy(web = if (webOk) Link.AVAILABLE else Link.UNAVAILABLE, bg = if (srv != null) Link.AVAILABLE else Link.UNAVAILABLE) }
         val hist = if (webOk) try { BgHistory.read(p) } catch (e: Exception) { null } else null
         adopt(p, srv, hist)
+        val pw = if (srv != null) Power.ON else Ps4Power.probe(p.host)
+        upStatus(p.id) { it.copy(power = pw) }
+        parts += tr("PS4 power: ", "حالة الـPS4: ") + pw.label
+        if (pw == Power.REST && srv == null) parts += tr("The PS4 is in rest mode: the server does not answer. Wake it, or wait if it keeps downloading by itself.", "الـPS4 في وضع الراحة: الخادم لا يستجيب. أيقظه، أو انتظر إن كان يواصل التحميل بنفسه.")
         parts.joinToString("\n")
     }
 

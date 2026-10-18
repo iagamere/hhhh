@@ -19,6 +19,7 @@ object Tx {
     private val m = mapOf(
         "Starting…" to "جارٍ البدء…",
         "ezRemote Server is not running. Launch ezRemote on the PS4." to "خادم ezRemote لا يعمل. شغّل ezRemote على الـPS4.",
+        "The PS4 is in rest mode and ezRemote Server is not answering. The app keeps watching and continues when the server answers again." to "الـPS4 في وضع الراحة وخادم ezRemote لا يستجيب. التطبيق يواصل المراقبة وسيكمل عندما يستجيب الخادم.",
         "The PS4 is not reachable." to "الـPS4 غير متاح.",
         "Queued in ezRemote Server (it downloads one file at a time)." to "في قائمة انتظار خادم ezRemote (يحمّل ملفًا واحدًا في كل مرة).",
         "ezRemote Server no longer lists this download." to "لم يعد خادم ezRemote يعرض هذا التحميل.",

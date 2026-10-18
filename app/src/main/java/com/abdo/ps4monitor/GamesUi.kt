@@ -99,6 +99,8 @@ import kotlinx.coroutines.withContext
         g.sfo["PARENTAL_LEVEL"]?.takeIf { it.isNotBlank() }?.let { add(tr("Parental level", "المستوى العائلي") to it) }
         add(tr("Install folder", "مجلد التثبيت") to "/user/app/${g.titleId}")
     }
+    var tab by rememberSaveable(g.titleId) { mutableIntStateOf(0) }
+    val screenH = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
     ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
@@ -119,7 +121,12 @@ import kotlinx.coroutines.withContext
                     Dim(listOfNotNull(g.titleId, g.version.takeIf { it.isNotBlank() }?.let { "v$it" }).joinToString("  •  "))
                 }
             }
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            TabRow(selectedTabIndex = tab) {
+                listOf(tr("Details", "التفاصيل"), tr("Captures", "اللقطات"), tr("Trophies", "الإنجازات")).forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Lbl(t) }) }
+            }
+            if (tab == 1) Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(screenH * 0.7f)) { CapturesTab(ps4, 0, g.titleId) }
+            if (tab == 2) Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) { TrophiesTab(ps4, g) }
+            if (tab == 0) Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 rows.forEach { (k, v) -> InfoRow(k, v) }
                 FilledTonalButton(onClick = { clip.setText(AnnotatedString(g.titleId)); Toast.makeText(ctx, tr("Copied", "تم النسخ"), Toast.LENGTH_SHORT).show() }) {
                     Ico(R.drawable.ic_copy, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Copy title ID", "نسخ معرّف اللعبة"))
