@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val FULL = 3072     // longest side of the picture decoded in the viewer (a 1080p / 4K capture is shown at full detail)
@@ -80,27 +81,36 @@ private const val VTHUMB = 480    // video frame size
     var selected by remember { mutableStateOf(setOf<String>()) }
     var viewing by remember { mutableStateOf<Int?>(null) }
     var confirmAll by remember { mutableStateOf<List<Capture>?>(null) }
+    var confirmDelete by remember { mutableStateOf<List<Capture>?>(null) }
+    var gone by remember(ps4.id, reload) { mutableStateOf(setOf<String>()) }          // deleted on the PS4 during this visit
+    var delProg by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var delMsg by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val save = rememberSaveAction(ps4)
     val saving by CaptureSaver.state.collectAsState()
     val busy by CaptureSaver.busy.collectAsState()
     val saved by CaptureSaver.saved.collectAsState()
     val msg by CaptureSaver.message.collectAsState()
     val s = scan
-    val shown = remember(s, videos) { s?.items?.filter { it.video == videos } ?: emptyList() }
+    val shown = remember(s, videos, gone) { s?.items?.filter { it.video == videos && it.path !in gone } ?: emptyList() }
     val ctx = LocalContext.current
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (s == null) { LinearProgressIndicator(Modifier.fillMaxWidth()); Dim(tr("Reading the capture folders…", "جارٍ قراءة مجلدات اللقطات…")); return@Column }
-        val nPhotos = s.items.count { !it.video }; val nVideos = s.items.size - nPhotos
+        val left = s.items.filter { it.path !in gone }
+        val nPhotos = left.count { !it.video }; val nVideos = left.size - nPhotos
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(!videos, { videos = false; selected = emptySet() }, label = { Lbl(tr("Screenshots", "لقطات الشاشة") + " ($nPhotos)") })
             FilterChip(videos, { videos = true; selected = emptySet() }, label = { Lbl(tr("Videos", "الفيديوهات") + " ($nVideos)") })
         }
         val unsaved = shown.filter { !saved.containsKey(CaptureSaver.key(ps4, it)) }
         if (selected.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { save(shown.filter { it.path in selected }); selected = emptySet() }) {
                     Ico(R.drawable.ic_download, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Save selected", "حفظ المحدد") + " (${selected.size})")
+                }
+                OutlinedButton(onClick = { confirmDelete = shown.filter { it.path in selected } }, enabled = delProg == null) {
+                    Ico(R.drawable.ic_delete, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Delete", "حذف") + " (${selected.size})")
                 }
                 TextButton(onClick = { selected = emptySet() }) { Lbl(tr("Cancel", "إلغاء")) }
             }
@@ -110,8 +120,10 @@ private const val VTHUMB = 480    // video frame size
                     Ico(R.drawable.ic_download, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Save all to album", "حفظ الكل في الألبوم") + " (${unsaved.size})")
                 }
             }
-            Dim(tr("Tip: press and hold a picture to select several.", "تلميح: اضغط مطولًا على صورة لتحديد عدة عناصر."))
+            Dim(tr("Tip: press and hold a picture to select several (to save or delete them).", "تلميح: اضغط مطولًا على صورة لتحديد عدة عناصر (لحفظها أو حذفها)."))
         }
+        delProg?.let { (d, t) -> LinearProgressIndicator(progress = { d.toFloat() / t.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth()); Dim(tr("Deleting from the PS4 ", "جارٍ الحذف من الـPS4 ") + "${(d + 1).coerceAtMost(t)}/$t") }
+        if (delProg == null && delMsg.isNotBlank()) Dim(delMsg)
         val st = saving
         if (st != null) {
             LinearProgressIndicator(progress = { st.fraction }, modifier = Modifier.fillMaxWidth())
@@ -141,10 +153,36 @@ private const val VTHUMB = 480    // video frame size
             confirmButton = { TextButton(onClick = { save(l); confirmAll = null }) { Lbl(tr("Save", "حفظ")) } },
             dismissButton = { TextButton(onClick = { confirmAll = null }) { Lbl(tr("Cancel", "إلغاء")) } })
     }
+    confirmDelete?.let { l ->
+        AlertDialog(onDismissRequest = { confirmDelete = null },
+            title = { Text(tr("Delete ${l.size} from the PS4?", "حذف ${l.size} من الـPS4؟")) },
+            text = { Text(tr("They are deleted from the console itself and cannot be recovered. Copies already saved to your gallery are not touched.",
+                "تُحذف من الجهاز نفسه ولا يمكن استرجاعها. النسخ المحفوظة في معرض هاتفك لا تتأثر.")) },
+            confirmButton = { TextButton(onClick = {
+                confirmDelete = null; selected = emptySet(); viewing = null
+                scope.launch {
+                    delMsg = ""; delProg = 0 to l.size
+                    val err = withContext(Dispatchers.IO) { EzServer.allowCaptureDelete(ps4) }
+                    if (err != null) { delProg = null; delMsg = tr("Could not delete: ", "تعذّر الحذف: ") + err }
+                    else {
+                        var ok = 0; var firstErr = ""
+                        l.forEachIndexed { i, c ->
+                            delProg = i to l.size
+                            val r = withContext(Dispatchers.IO) { EzServer.deleteCapture(ps4, c.path) }
+                            if (r.ok || r.message.startsWith("No such")) { ok++; gone = gone + c.path } else if (firstErr.isEmpty()) firstErr = r.message
+                        }
+                        delProg = null
+                        delMsg = if (firstErr.isEmpty()) tr("Deleted $ok from the PS4.", "حُذف $ok من الـPS4.")
+                                 else tr("Deleted $ok of ${l.size}. The PS4 refused the rest: ", "حُذف $ok من ${l.size}. رفض الـPS4 الباقي: ") + firstErr
+                    }
+                }
+            }) { Lbl(tr("Delete", "حذف")) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Lbl(tr("Cancel", "إلغاء")) } })
+    }
     val vi = viewing
     if (vi != null && vi in shown.indices) {
         CaptureViewer(ps4, shown, vi, saved, busy, saving, onSave = { save(listOf(it)) },
-            onOpen = { CaptureSaver.open(ctx, ps4, it) }, onClose = { viewing = null })
+            onOpen = { CaptureSaver.open(ctx, ps4, it) }, onDelete = { confirmDelete = listOf(it) }, onClose = { viewing = null })
     }
 }
 
@@ -173,7 +211,7 @@ private const val VTHUMB = 480    // video frame size
 
 // ---------------------------------------------------------------- full-screen viewer
 @Composable private fun CaptureViewer(ps4: Ps4, items: List<Capture>, start: Int, saved: Map<String, String>, busy: Set<String>, saving: CaptureSaver.State?,
-                                      onSave: (Capture) -> Unit, onOpen: (Capture) -> Unit, onClose: () -> Unit) {
+                                      onSave: (Capture) -> Unit, onOpen: (Capture) -> Unit, onDelete: (Capture) -> Unit, onClose: () -> Unit) {
     val pager = rememberPagerState(initialPage = start.coerceIn(0, items.lastIndex)) { items.size }
     var chrome by remember { mutableStateOf(true) }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -193,6 +231,7 @@ private const val VTHUMB = 480    // video frame size
                         Text(Ps4Info.names[cur.titleId] ?: cur.titleId.ifEmpty { cur.name }, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${pager.currentPage + 1} / ${items.size}", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
                     }
+                    IconButton(onClick = { onDelete(cur) }) { Ico(R.drawable.ic_delete, 24.dp, Color.White) }
                 }
             }
             AnimatedVisibility(chrome, Modifier.align(Alignment.BottomCenter)) {
@@ -236,17 +275,20 @@ private const val VTHUMB = 480    // video frame size
 }
 
 @Composable private fun VideoPage(ps4: Ps4, c: Capture, saved: Boolean, onTap: () -> Unit, onOpen: () -> Unit) {
+    var stream by remember(c.path) { mutableStateOf(false) }
     val frame by produceState<Bitmap?>(Thumbs.peekVideo(ps4, c.path, VTHUMB), c.path) { if (value == null) value = Thumbs.videoFrame(ps4, c.path, c.size, VTHUMB) }
     Column(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color(0xFF111111)), contentAlignment = Alignment.Center) {
-            frame?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
-            if (saved) FilledIconButton(onClick = onOpen, modifier = Modifier.size(64.dp)) { Ico(R.drawable.ic_play, 36.dp) }
-            else Ico(R.drawable.ic_play, 56.dp, Color.White.copy(alpha = 0.7f))
+            if (stream) StreamPlayer(ps4, c, Modifier.fillMaxSize())
+            else {
+                frame?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                FilledIconButton(onClick = { stream = true }, modifier = Modifier.size(64.dp)) { Ico(R.drawable.ic_play, 36.dp) }
+            }
         }
         Spacer(Modifier.height(16.dp))
-        Text(if (saved) tr("Tap play to watch it from your gallery.", "اضغط تشغيل لمشاهدته من المعرض.")
-             else tr("Save the video to the album, then play it.", "احفظ الفيديو في الألبوم ثم شغّله."),
+        Text(tr("Plays straight from the PS4: nothing is downloaded. Saving to the album is optional.", "يعمل مباشرة من الـPS4: لا يُحمَّل شيء. الحفظ في الألبوم اختياري."),
             color = Color.White.copy(alpha = 0.85f), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 32.dp))
+        if (saved) TextButton(onClick = onOpen) { Lbl(tr("Open the saved copy in the gallery", "فتح النسخة المحفوظة في المعرض")) }
     }
 }
 

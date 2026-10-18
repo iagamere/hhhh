@@ -279,6 +279,37 @@ object EzServer {
         fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), 60_000); EzRemote.OpResult(true, "")
     } catch (e: EzError) { EzRemote.OpResult(false, e.message ?: "ezRemote Server refused the request.") }
 
+    // ---------------- deleting captures ----------------
+    /** The only folders where this app deletes captures. Added to the server's WRITABLE folders (fs_roots) on demand, never by default. */
+    val CAPTURE_DIRS = listOf("/user/av_contents/photo", "/user/av_contents/video")
+    private fun isCapturePath(p: String) = !p.contains("..") && CAPTURE_DIRS.any { p.startsWith("$it/") }
+
+    /** The server refuses deletes in its read-only folders ("Path is outside the writable folders (fs_roots)"): adds the capture folders to fs_roots, keeping the others. Null = done, otherwise an error text. */
+    fun allowCaptureDelete(ps4: Ps4): String? = try {
+        if (!isV2(ps4, 4000)) "The server is not running (or is not our server)."
+        else {
+            val cur = v2cache[ps4.id]?.fsRoots.orEmpty()
+            if (CAPTURE_DIRS.all { it in cur }) null
+            else {
+                val arr = JSONArray(); (cur + CAPTURE_DIRS).distinct().forEach { arr.put(it) }
+                val r = call(ps4, "POST", "/v2/settings", JSONObject().put("fs_roots", arr).toString(), 5000)
+                forget(ps4)
+                if (r.code !in 200..299) "The server refused to make the capture folders writable (HTTP ${r.code})."
+                else {
+                    val now = rootsOf(runCatching { JSONObject(r.body).optJSONObject("settings") }.getOrNull())
+                    if (CAPTURE_DIRS.all { it in now }) null else "The server did not accept the capture folders as writable. It now allows: " + now.joinToString().ifBlank { "nothing" }
+                }
+            }
+        }
+    } catch (e: Exception) { EzRemote.friendly(e) }
+
+    /** Deletes one capture file. Only paths under the two capture folders are accepted. */
+    fun deleteCapture(ps4: Ps4, path: String): EzRemote.OpResult {
+        if (!isCapturePath(path)) return EzRemote.OpResult(false, "Refused: not a capture path.")
+        return try { fsOp(ps4, "delete", JSONObject().put("path", path)) }
+        catch (e: Exception) { EzRemote.OpResult(false, if (e is FsUnavailable) (e.message ?: "The server is not reachable.") else EzRemote.friendly(e)) }
+    }
+
     // ---------------- read-only folders, space, system info (server abdo10, fs_api 2) ----------------
     val RO_DEFAULT = listOf("/user/av_contents", "/user/app", "/user/appmeta", "/system_data/priv/appmeta", "/user/home", "/system_data/priv/home", "/user/theme", "/user/themes", "/system_data/priv/theme", "/system_data/theme", "/system_ex/theme", "/user/system/theme")
     /** Extra read-only folders typed by the user (one per line in the preferences). */

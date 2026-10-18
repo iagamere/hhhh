@@ -1,4 +1,9 @@
-# PS4 Download Monitor 5.3.2
+# PS4 Download Monitor 5.4
+
+## 5.4
+- **Delete captures from the PS4:** long-press to select (Delete button) or the trash icon in the full-screen viewer. Deleting goes through the server's `/v2/fs/delete`. The server refuses deletes in read-only folders ("Path is outside the writable folders (fs_roots)"), so before the first delete the app adds ONLY `/user/av_contents/photo` and `/user/av_contents/video` to the server's writable folders (`EzServer.allowCaptureDelete`, existing writable folders are kept). `EzServer.deleteCapture` refuses any path outside those two folders. Not undoable.
+- **Play videos without downloading:** tap play in the viewer. `VideoStream.kt` feeds Android's MediaPlayer from `/v2/fs/read` (1 MiB blocks, next block fetched ahead, nothing saved on the phone). Play/pause and a seek bar; no fullscreen rotation yet. Codec support is whatever the phone's MediaPlayer supports.
+- NOT compiled and NOT run on a phone or PS4. If the server does not accept the writable-folder change, the app shows the server's own answer.
 
 ## 5.3.2
 - Captures are read ONLY from `/user/av_contents/photo` and `/user/av_contents/video` (Ps4Info.scanCaptures). Other folders under av_contents and the extra read-only folders are no longer scanned for captures. If those two folders do not exist on the console the list is empty and the technical notes say which path was refused.
