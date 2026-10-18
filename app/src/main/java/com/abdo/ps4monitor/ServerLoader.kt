@@ -47,6 +47,18 @@ object ServerLoader {
                 try { s.shutdownOutput() } catch (e: Exception) { }
             }
             return null
-        } catch (e: Exception) { return EzRemote.friendly(e) }
+        } catch (e: java.net.SocketTimeoutException) { return "The PS4 did not answer on port $PORT (GoldHEN payload loader) in time."
+        } catch (e: java.net.ConnectException) { return "Cannot connect to $host:$PORT (GoldHEN payload loader). Sending the server does NOT need ezRemote."
+        } catch (e: java.net.NoRouteToHostException) { return "No route to $host:$PORT (GoldHEN payload loader). Is the PS4 on and on this Wi-Fi?"
+        } catch (e: Exception) { return "Sending to $host:$PORT failed: ${e.javaClass.simpleName}" }
+    }
+
+    /** Which of the PS4's known ports answer right now (for a clear error message). */
+    fun portReport(host: String): String {
+        fun open(p: Int) = try { Socket().use { it.connect(InetSocketAddress(host, p), 1500); true } } catch (e: Exception) { false }
+        val l = open(PORT); val s = open(EzServer.PORT); val w = open(8080)
+        fun f(b: Boolean) = if (b) "open" else "closed"
+        return "$host  →  9090 (GoldHEN loader): ${f(l)}  •  6701 (server): ${f(s)}  •  8080 (ezRemote web): ${f(w)}" +
+            if (!l && !s && !w) "\nNothing answers: the PS4 is off / in rest mode, or its IP changed (use Add PS4 → Find my PS4)." else ""
     }
 }

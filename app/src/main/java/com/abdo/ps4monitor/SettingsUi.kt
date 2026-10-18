@@ -129,11 +129,43 @@ import kotlinx.coroutines.withContext
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var scanning by remember { mutableStateOf(false) }
+    var scanDone by remember { mutableStateOf(false) }
+    var scanNoNet by remember { mutableStateOf(false) }
+    var scanProg by remember { mutableFloatStateOf(0f) }
+    val found = remember { mutableStateListOf<Discovery.Found>() }
+    fun scan() {
+        if (scanning) return
+        scanning = true; scanDone = false; scanNoNet = false; scanProg = 0f; found.clear()
+        scope.launch {
+            val n = Discovery.scan({ d, t -> scanProg = d.toFloat() / t }, { f -> scope.launch { found.add(f) } })
+            scanNoNet = n == 0; scanning = false; scanDone = true
+            // exactly one strong candidate and nothing typed yet: fill it in
+            val strong = found.filter { it.likely }
+            if (host.isBlank() && strong.size == 1) host = strong[0].host
+        }
+    }
+    LaunchedEffect(Unit) { if (isNew && host.isBlank()) scan() }
     fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest), token = token.trim())
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         BackHeader(if (isNew) tr("Add PS4", "إضافة PS4") else tr("Edit PS4", "تعديل PS4"), nav)
         val full = Modifier.fillMaxWidth()
         OutlinedTextField(name, { name = it }, label = { Text(tr("Name (e.g. Living Room)", "الاسم (مثل غرفة المعيشة)")) }, singleLine = true, modifier = full)
+        Panel {
+            Button(enabled = !scanning, onClick = { scan() }, modifier = full) { Ico(R.drawable.ic_search, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Find my PS4 on the network", "البحث عن الـPS4 في الشبكة")) }
+            if (scanning) { LinearProgressIndicator(progress = { scanProg.coerceIn(0f, 1f) }, modifier = full); Dim(tr("Searching… (a few seconds)", "جارٍ البحث… (بضع ثوانٍ)")) }
+            found.sortedByDescending { it.likely }.forEach { f ->
+                Card(onClick = { host = f.host }, modifier = full, colors = CardDefaults.cardColors(containerColor = if (f.host == host) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(f.host + if (f.likely) "   ✓" else "", fontWeight = FontWeight.SemiBold)
+                        Dim((if (f.server) tr("ezRemote Server (", "خادم ezRemote (") + f.serverKind + "), " else "") + (if (f.loader) tr("GoldHEN loader, ", "محمّل GoldHEN، ") else "") + tr("open ports: ", "المنافذ المفتوحة: ") + f.ports)
+                    }
+                }
+            }
+            if (scanDone && scanNoNet) Dim(tr("The phone has no local network address. Connect to the same Wi-Fi as the PS4.", "ليس للهاتف عنوان شبكة محلية. اتصل بنفس شبكة الواي فاي الخاصة بالـPS4."))
+            else if (scanDone && found.isEmpty()) Dim(tr("No PS4 found. Make sure it is on (not in rest mode), on the same Wi-Fi, and that ezRemote or GoldHEN's payload loader is running. Or type the IP below.", "لم يُعثر على PS4. تأكد أنه يعمل (ليس في وضع الراحة) وعلى نفس الشبكة، وأن ezRemote أو محمّل GoldHEN يعمل. أو اكتب الـIP بالأسفل."))
+            else if (scanDone && found.none { it.likely }) Dim(tr("Only port 8080 answered: this may not be a PS4. Pick it only if you recognise the address.", "استجاب المنفذ 8080 فقط: قد لا يكون PS4. اخترْه فقط إن عرفت العنوان."))
+        }
         OutlinedTextField(host, { host = it }, label = { Text(tr("PS4 IP address / host", "عنوان IP للـPS4")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
         OutlinedTextField(http, { http = it }, label = { Text(tr("ezRemote web port (default 8080)", "منفذ ويب ezRemote (الافتراضي 8080)")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         OutlinedTextField(dest, { dest = it }, label = { Text(tr("Default download folder", "مجلد التحميل الافتراضي")) }, singleLine = true, modifier = full)

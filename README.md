@@ -1,4 +1,23 @@
-# PS4 Download Monitor 5.2
+# PS4 Download Monitor 5.3.1
+
+## 5.3.1 = 5.2.3 (auto-discovery, clearer send errors) + the 5.3 PS4 information work
+- Merged from your separate 5.3: Capture/Games screens, Thumbs fix, one-tap save to gallery, wider read-only folders (EzServer.RO_DEFAULT), manifest storage permission for Android 8/9, App.kt init.
+- Deliberately NOT merged: the "Original ezRemote Server" choice added to ServerPicker in 5.3 (ezRemote is no longer needed).
+
+## 5.3: PS4 information, fixed and rebuilt
+- **Why no picture ever showed:** the image loader did its network read on the main thread; Android refuses that (NetworkOnMainThreadException) and the error was swallowed as "no image". `Thumbs` now runs on Dispatchers.IO, and small thumbnails are also cached on disk (instant the second time).
+- **Captures:** thumbnail grid, tap = full-screen viewer (swipe between pictures, pinch / double-tap zoom, tap to hide the bars, full resolution up to 3072 px, files up to 64 MB). Videos get a thumbnail frame (best effort, a few MB read by range requests).
+- **One-tap save:** the Save button (or long-press to select several / "Save all") copies the ORIGINAL bytes into the gallery album `DCIM/PS4 Monitor` through MediaStore: photos and videos in one album, no file picker. Android 10+ needs no permission; Android 8/9 asks for storage permission once. Saved items show a tick and open in the gallery / video player. The album name is `CaptureSaver.ALBUM` in Gallery.kt.
+- **Games:** grid of square covers (icon0.png, 1:1) with name, id and version; tap = details sheet (background picture pic1/pic0, cover, Title ID, Content ID, type, version, content version, required firmware, parental level, install folder, copy id).
+- NOT compiled here (no Android SDK) and not run on a console: expect to fix a compile error or two on first sync.
+
+
+## 5.2.3 clearer "could not send" error
+- Sending the server goes to GoldHEN's loader (port 9090) only; it never needs ezRemote. The old message wrongly said "ezRemote web server". Now it names port 9090 and shows which of 9090 / 6701 / 8080 answer right now.
+
+## 5.2.2 find the PS4 automatically
+- **Add PS4** now searches the network by itself (and has a "Find my PS4 on the network" button). `Discovery.kt` scans the phone's own /24 networks (Wi-Fi and hotspot) for ports 6701 (ezRemote Server, identified with /v2/info or /get_download_state), 9090 (GoldHEN payload loader) and 8080 (ezRemote web, weak evidence). Tap a result to fill the IP; if exactly one strong candidate is found and the field is empty, it is filled for you.
+- Only scans /24 networks. NOT compiled and NOT run on a phone or PS4. Router "client isolation" / guest Wi-Fi blocks the scan.
 
 Open in Android Studio (JDK 17), sync Gradle, run. NOT compiled by the author (no Android SDK available): expect to fix a few compile errors on first sync.
 

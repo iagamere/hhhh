@@ -27,8 +27,11 @@ object ServerSwitch {
     suspend fun sendAndWait(ps4: Ps4, file: File, onStage: (String, Float?) -> Unit): Pair<Boolean, String> {
         onStage(tr("Sending to the PS4…", "جارٍ الإرسال إلى الـPS4…"), 0f)
         val err = withContext(Dispatchers.IO) { ServerLoader.send(ps4.host, file) { p -> onStage(tr("Sending to the PS4…", "جارٍ الإرسال إلى الـPS4…"), p / 100f) } }
-        if (err != null) return false to (tr("Could not send: ", "تعذّر الإرسال: ") + Tx.t(err) + "\n" +
-            tr("Check that \"Enable PayLoader Server\" is on in GoldHEN settings.", "تأكد أن «Enable PayLoader Server» مفعّل في إعدادات GoldHEN."))
+        if (err != null) {
+            val rep = withContext(Dispatchers.IO) { ServerLoader.portReport(ps4.host) }
+            return false to (tr("Could not send: ", "تعذّر الإرسال: ") + err + "\n" + rep + "\n" +
+                tr("Check that \"Enable PayLoader Server\" is on in GoldHEN settings.", "تأكد أن «Enable PayLoader Server» مفعّل في إعدادات GoldHEN."))
+        }
         // a custom server may already be running: remember its version so the OLD one answering is not mistaken for the new one
         val before = withContext(Dispatchers.IO) { EzServer.info(ps4, 2500) }
         val beforeVer: String? = if (before != null && before.custom && !before.locked) before.version else null

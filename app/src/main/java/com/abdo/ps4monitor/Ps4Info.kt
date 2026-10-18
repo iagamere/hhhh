@@ -1,10 +1,18 @@
 package com.abdo.ps4monitor
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaDataSource
+import android.media.MediaMetadataRetriever
 import android.util.LruCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
+import java.io.IOException
+import java.security.MessageDigest
 
 /**
  * Everything the "PS4" screen shows. All of it is read through ezRemote Server (the /v2/fs routes and /v2/sysinfo), so it also works while a game is running.
@@ -12,7 +20,7 @@ import org.json.JSONObject
  * a "Check paths" report so you can see exactly which of them the console answered.
  */
 data class Capture(val path: String, val name: String, val size: Long, val mtime: Long, val video: Boolean, val titleId: String)
-data class GameInfo(val titleId: String, val title: String, val version: String, val category: String, val iconPath: String?, val sfoPath: String?)
+data class GameInfo(val titleId: String, val title: String, val version: String, val category: String, val metaDir: String?, val sfoPath: String?, val sfo: Map<String, String> = emptyMap())
 data class Volume(val label: String, val path: String, val total: Long, val free: Long)
 data class PathCheck(val path: String, val ok: Boolean, val detail: String)
 class CaptureScan(val items: List<Capture>, val notes: List<String>, val truncated: Boolean)
@@ -97,13 +105,13 @@ object Ps4Info {
         val res = ArrayList<GameInfo>()
         ids.sorted().take(limit).forEachIndexed { i, id ->
             progress(i, ids.size.coerceAtMost(limit))
-            var sfo: Map<String, String> = emptyMap(); var sfoPath: String? = null; var icon: String? = null
+            var sfo: Map<String, String> = emptyMap(); var sfoPath: String? = null; var meta: String? = null
             for (m in META_DIRS) {
                 val p = "$m/$id/param.sfo"
                 val bytes = try { EzServer.fsRead(ps4, p, 0, 64 * 1024, 6000) } catch (e: Exception) { ByteArray(0) }
-                if (bytes.isNotEmpty()) { val s = runCatching { parseSfo(bytes) }.getOrDefault(emptyMap()); if (s.isNotEmpty()) { sfo = s; sfoPath = p; icon = "$m/$id/icon0.png"; break } }
+                if (bytes.isNotEmpty()) { val s = runCatching { parseSfo(bytes) }.getOrDefault(emptyMap()); if (s.isNotEmpty()) { sfo = s; sfoPath = p; meta = m; break } }
             }
-            res.add(GameInfo(id, sfo["TITLE"] ?: id, sfo["APP_VER"] ?: sfo["VERSION"] ?: "", sfo["CATEGORY"] ?: "", icon, sfoPath))
+            res.add(GameInfo(id, sfo["TITLE"] ?: id, sfo["APP_VER"] ?: sfo["VERSION"] ?: "", sfo["CATEGORY"] ?: "", meta, sfoPath, sfo))
         }
         progress(res.size, res.size)
         names = res.associate { it.titleId to it.title }
@@ -112,6 +120,19 @@ object Ps4Info {
     fun categoryLabel(c: String) = when (c) {
         "gd" -> tr("Game", "لعبة"); "gp" -> tr("Update", "تحديث"); "ac" -> tr("Add-on", "محتوى إضافي"); "gde" -> tr("Game", "لعبة")
         "" -> ""; else -> c
+    }
+
+    /** Candidate paths of a title's artwork files (icon0.png = square cover, pic0/pic1.png = 16:9 backgrounds). The folder that held param.sfo comes first. */
+    fun art(g: GameInfo, vararg files: String): List<String> {
+        val dirs = (listOfNotNull(g.metaDir) + META_DIRS).distinct()
+        return files.flatMap { f -> dirs.map { "$it/${g.titleId}/$f" } }
+    }
+    /** SYSTEM_VER of param.sfo is a BCD number: 0x07550000 = firmware 7.55. */
+    fun firmware(v: String?): String? {
+        val n = v?.toLongOrNull() ?: return null
+        if (n <= 0) return null
+        val h = String.format("%08x", n)
+        return (h.substring(0, 2).trimStart('0').ifEmpty { "0" }) + "." + h.substring(2, 4)
     }
 
     // ---------------- storage ----------------
@@ -164,31 +185,134 @@ object Ps4Info {
     }
 }
 
-/** Decoded thumbnails, shared by the grid and the viewer. At most 3 reads at a time so the PS4's server is not flooded. */
+/**
+ * Decoded images, shared by the grids and the viewer. At most 3 reads at a time so the PS4's server is not flooded.
+ * Everything runs on Dispatchers.IO: these functions are called from composables (main thread), and a network call there would throw
+ * NetworkOnMainThreadException, which used to be swallowed as "no image". Small sizes (<= 512 px) are also kept on disk.
+ */
 object Thumbs {
-    private val cache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 10).toInt().coerceAtLeast(4 shl 20)) {
+    private val cache = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8).toInt().coerceAtLeast(8 shl 20)) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val gate = Semaphore(3)
-    const val MAX_READ = 8L shl 20
+    private val videoGate = Semaphore(1)
+    const val MAX_READ = 64L shl 20
+    /** Why the last image failed (shown next to a failed picture). */
+    @Volatile var lastError: String = ""
+    private var dir: File? = null
+    private var writes = 0
+
+    fun init(c: Context) { dir = File(c.cacheDir, "thumbs").also { it.mkdirs() } }
+    fun key(ps4: Ps4, path: String, maxSide: Int) = "${ps4.id}|$path|$maxSide"
     fun cached(key: String): Bitmap? = cache.get(key)
-    fun decode(b: ByteArray, maxSide: Int): Bitmap? {
+    fun peek(ps4: Ps4, path: String, maxSide: Int): Bitmap? = cache.get(key(ps4, path, maxSide))
+    fun peekVideo(ps4: Ps4, path: String, maxSide: Int): Bitmap? = cache.get(key(ps4, "$path#v", maxSide))
+    fun peekAny(ps4: Ps4, paths: List<String>, maxSide: Int): Bitmap? = paths.firstNotNullOfOrNull { peek(ps4, it, maxSide) }
+
+    // ---- disk cache (small thumbnails only)
+    private fun file(k: String): File? = dir?.let { d ->
+        File(d, MessageDigest.getInstance("SHA-1").digest(k.toByteArray()).joinToString("") { b -> "%02x".format(b) } + ".jpg")
+    }
+    private fun diskGet(k: String): Bitmap? = file(k)?.takeIf { it.exists() }?.let { f -> runCatching { BitmapFactory.decodeFile(f.path) }.getOrNull() }
+    private fun diskPut(k: String, b: Bitmap) {
+        val f = file(k) ?: return
+        try { f.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 90, it) } } catch (e: Exception) { f.delete(); return }
+        if (++writes % 100 == 0) {
+            val fs = dir?.listFiles() ?: return
+            if (fs.size > 4000) fs.sortedBy { it.lastModified() }.take(fs.size - 3000).forEach { it.delete() }
+        }
+    }
+
+    fun decode(b: ByteArray, maxSide: Int): Bitmap? = try {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(b, 0, b.size, o)
-        if (o.outWidth <= 0 || o.outHeight <= 0) return null
-        var s = 1; while (maxOf(o.outWidth, o.outHeight) / (s * 2) >= maxSide) s *= 2
-        return BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = s })
+        if (o.outWidth <= 0 || o.outHeight <= 0) null else {
+            var s = 1; while (maxOf(o.outWidth, o.outHeight) / (s * 2) >= maxSide) s *= 2
+            BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = s })
+        }
+    } catch (e: OutOfMemoryError) { null }
+
+    private fun fit(b: Bitmap, maxSide: Int): Bitmap {
+        val m = maxOf(b.width, b.height); if (m <= maxSide) return b
+        val f = maxSide.toFloat() / m
+        return Bitmap.createScaledBitmap(b, (b.width * f).toInt().coerceAtLeast(1), (b.height * f).toInt().coerceAtLeast(1), true)
     }
-    /** Null when the file is too big, not an image, or could not be read. */
-    suspend fun load(ps4: Ps4, path: String, size: Long, maxSide: Int): Bitmap? {
-        val key = "${ps4.id}|$path|$maxSide"
-        cache.get(key)?.let { return it }
-        return gate.withPermit {
-            cache.get(key) ?: try {
+
+    /** Null when the file is too big, not an image, or could not be read ([lastError] says why). Safe to call from the main thread. */
+    suspend fun load(ps4: Ps4, path: String, size: Long, maxSide: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val k = key(ps4, path, maxSide)
+        cache.get(k)?.let { return@withContext it }
+        val dk = "${ps4.id}|$path|$size|$maxSide"
+        if (maxSide <= 512) diskGet(dk)?.let { cache.put(k, it); return@withContext it }
+        gate.withPermit {
+            cache.get(k) ?: try {
                 val sz = if (size > 0) size else EzServer.fsSize(ps4, path, 6000)
-                if (sz <= 0 || sz > MAX_READ) null
-                else decode(EzServer.fsRead(ps4, path, 0, sz.toInt(), 20_000), maxSide)?.also { cache.put(key, it) }
+                if (sz <= 0) { lastError = tr("File not found", "الملف غير موجود"); null }
+                else if (sz > MAX_READ) { lastError = tr("File too large", "الملف كبير جدًا"); null }
+                else {
+                    val bmp = decode(EzServer.fsRead(ps4, path, 0, sz.toInt(), 30_000), maxSide)
+                    if (bmp == null) { lastError = tr("Not a readable image", "ليست صورة قابلة للقراءة"); null }
+                    else { cache.put(k, bmp); if (maxSide <= 512) diskPut(dk, bmp); bmp }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { lastError = e.message ?: e.javaClass.simpleName; null }
+        }
+    }
+
+    /** The first of [paths] that exists and decodes (artwork can live in more than one folder). */
+    suspend fun loadAny(ps4: Ps4, paths: List<String>, maxSide: Int): Bitmap? {
+        for (p in paths) { val b = load(ps4, p, 0, maxSide); if (b != null) return b }
+        return null
+    }
+
+    /** A frame of a video, read with partial range requests (only a few MB of the file are fetched). Best effort: null when the codec/container is not supported. */
+    suspend fun videoFrame(ps4: Ps4, path: String, size: Long, maxSide: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val k = key(ps4, "$path#v", maxSide)
+        cache.get(k)?.let { return@withContext it }
+        val dk = "${ps4.id}|$path#v|$size|$maxSide"
+        diskGet(dk)?.let { cache.put(k, it); return@withContext it }
+        videoGate.withPermit {
+            cache.get(k) ?: try {
+                val sz = if (size > 0) size else EzServer.fsSize(ps4, path, 6000)
+                if (sz <= 0) null else {
+                    val r = MediaMetadataRetriever()
+                    try {
+                        r.setDataSource(RangeSource(ps4, path, sz))
+                        val f = r.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0L)
+                        f?.let { fit(it, maxSide) }?.also { cache.put(k, it); diskPut(dk, it) }
+                    } finally { runCatching { r.release() } }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { null }
         }
+    }
+
+    /** MediaDataSource over /v2/fs/read: 1 MiB blocks, 6 kept, and at most 64 MB fetched per video so a thumbnail can never download a whole clip. */
+    private class RangeSource(val ps4: Ps4, val path: String, val total: Long) : MediaDataSource() {
+        private val blocks = object : LinkedHashMap<Long, ByteArray>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, ByteArray>?): Boolean = this.size > 6
+        }
+        private var fetched = 0L
+        override fun getSize(): Long = total
+        override fun close() { blocks.clear() }
+        @Synchronized override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+            if (position < 0 || position >= total) return -1
+            val want = minOf(size.toLong(), total - position).toInt()
+            var done = 0
+            while (done < want) {
+                val pos = position + done; val idx = pos / BLOCK
+                val blk: ByteArray = blocks[idx] ?: run {
+                    if (fetched > BUDGET) throw IOException("thumbnail budget used")
+                    val start = idx * BLOCK; val len = minOf(BLOCK.toLong(), total - start).toInt()
+                    val d = EzServer.fsRead(ps4, path, start, len, 20_000)
+                    if (d.isEmpty()) throw IOException("empty read")
+                    fetched += d.size; blocks[idx] = d; d
+                }
+                val inBlk = (pos - idx * BLOCK).toInt()
+                if (inBlk >= blk.size) break
+                val n = minOf(want - done, blk.size - inBlk)
+                System.arraycopy(blk, inBlk, buffer, offset + done, n); done += n
+            }
+            return if (done == 0) -1 else done
+        }
+        companion object { const val BLOCK = 1 shl 20; const val BUDGET = 64L shl 20 }
     }
 }
