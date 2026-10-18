@@ -114,8 +114,21 @@ object EzRemote {
         return op(ps4, "/__local__/createFolder", JSONObject().put("newPath", path), 10_000, 30_000)
     }
     /** POST /__local__/move | copy {"items":[..],"newPath":destinationFolder} — synchronous, can take very long for big files. */
-    fun move(ps4: Ps4, paths: List<String>, dest: String) = op(ps4, "/__local__/move", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
-    fun copy(ps4: Ps4, paths: List<String>, dest: String) = op(ps4, "/__local__/copy", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
+    /** Through our server when it can (fs_api 3: also across volumes), otherwise through ezRemote Client's web server. */
+    private fun viaServer(ps4: Ps4, op: String, paths: List<String>, dest: String, readOnlySource: Boolean): OpResult? {
+        if (paths.isEmpty() || !paths.all { EzServer.fsUsable(ps4, it, write = !readOnlySource) } || !EzServer.fsUsable(ps4, dest) || !EzServer.installSupported(ps4)) return null
+        try {
+            for (p in paths) {
+                val r = EzServer.fsOp(ps4, op, JSONObject().put("from", p).put("to", joinPath(dest, p.substringAfterLast('/'))), 3_600_000)
+                if (!r.ok) return r
+            }
+            return OpResult(true, "")
+        } catch (e: EzServer.FsUnavailable) { return null }
+    }
+    fun move(ps4: Ps4, paths: List<String>, dest: String): OpResult =
+        viaServer(ps4, "rename", paths, dest, false) ?: op(ps4, "/__local__/move", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
+    fun copy(ps4: Ps4, paths: List<String>, dest: String): OpResult =
+        viaServer(ps4, "copy", paths, dest, true) ?: op(ps4, "/__local__/copy", JSONObject().put("items", items(paths)).put("newPath", dest), 10_000, 3_600_000)
     /** POST /__local__/extract {"item","destination","folderName"} (zip/rar/7z). */
     fun extract(ps4: Ps4, item: String, destination: String, folderName: String) =
         op(ps4, "/__local__/extract", JSONObject().put("item", item).put("destination", destination).put("folderName", folderName), 10_000, 3_600_000)

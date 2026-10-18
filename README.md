@@ -1,3 +1,11 @@
+# PS4 Download Monitor 5.7
+
+## 5.7 (goes with ezRemote Server 2.0.0-abdo12): install and copy through our server
+- **Install** (every Install button) now goes through our server: `POST /v2/install`, progress from `GET /v2/install/status`. ezRemote Client does not have to be open. The package must be inside a folder the server may access (the download folder is by default). An already installed game is reported as an error, never uninstalled.
+- **Copy / Move** use our server when it can (`/v2/fs/copy`, `/v2/fs/rename`, also across volumes); Extract and text edit still use ezRemote Client's web server; the old paths remain as a fallback when our server is not running.
+- Needs the abdo12 server (bundled in the app): choose "Our server" on the Home screen once to send it. Older servers keep working for everything else.
+- NOT tested on a console: the install calls follow ezRemote Client's local install (BGFT) but could not be run here. NOT compiled.
+
 # PS4 Download Monitor 5.6.3
 
 ## 5.6 game library (captures + trophies per game)

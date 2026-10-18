@@ -45,9 +45,9 @@ private sealed class FilesState { object Loading : FilesState(); class Ok(val it
 @Composable fun ConfirmInstall(ps4: Ps4, paths: List<String>, close: () -> Unit) {
     AlertDialog(onDismissRequest = close, title = { Text(tr("Install on the PS4?", "تثبيت على الـPS4؟")) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(tr("ezRemote will start installing ${paths.size} package(s) on ${ps4.name}.", "سيبدأ ezRemote تثبيت ${paths.size} حزمة على ${ps4.name}."))
+            Text(tr("${paths.size} package(s) will be installed on ${ps4.name} by our server.", "ستُثبَّت ${paths.size} حزمة على ${ps4.name} بواسطة سيرفرنا."))
             paths.take(4).forEach { Dim(it, maxLines = 2) }
-            Dim(tr("This app only sends the request; the install progress is shown by the PS4 itself.", "التطبيق يرسل الطلب فقط؛ الـPS4 نفسه يعرض تقدم التثبيت."))
+            Dim(tr("You can follow the progress here and in Notifications on the PS4.", "يمكنك متابعة التقدم هنا وفي الإشعارات على الـPS4."))
         } },
         confirmButton = { TextButton(onClick = { Ops.launch(tr("Installing…", "جارٍ التثبيت…")) { Ops.install(ps4, paths) }; close() }) { Lbl(tr("Install", "تثبيت")) } },
         dismissButton = { TextButton(onClick = close) { Lbl(tr("Cancel", "إلغاء")) } })

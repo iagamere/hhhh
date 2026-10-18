@@ -275,8 +275,8 @@ object EzServer {
         return out.toByteArray()
     }
     /** op: delete {path} | rename {from,to} | mkdir {path}. */
-    fun fsOp(ps4: Ps4, op: String, body: JSONObject): EzRemote.OpResult = try {
-        fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), 60_000); EzRemote.OpResult(true, "")
+    fun fsOp(ps4: Ps4, op: String, body: JSONObject, timeoutMs: Int = 60_000): EzRemote.OpResult = try {
+        fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), timeoutMs); EzRemote.OpResult(true, "")
     } catch (e: EzError) { EzRemote.OpResult(false, e.message ?: "ezRemote Server refused the request.") }
 
     // ---------------- deleting captures ----------------
@@ -345,6 +345,20 @@ object EzServer {
     fun fsSpace(ps4: Ps4, path: String, timeoutMs: Int): Pair<Long, Long> {
         val j = fsCall(ps4, "GET", "/v2/fs/space?path=" + enc(path), null, timeoutMs)
         return j.optLong("total") to j.optLong("free")
+    }
+    // ---------------- install through the server (abdo12, fs_api 3) ----------------
+    /** True when the running server can install packages and copy files by itself (fs_api >= 3). */
+    fun installSupported(ps4: Ps4): Boolean = (v2cache[ps4.id]?.fsApi ?: 0) >= 3
+    class InstallStart(val taskId: Int, val titleId: String)
+    class InstallProgress(val length: Long, val transferred: Long, val errorResult: Int, val done: Boolean)
+    /** Starts installing a .pkg that is on the console (what Debug Settings -> Package Installer does). Throws EzError with the server's reason. */
+    fun installPkg(ps4: Ps4, path: String): InstallStart {
+        val j = fsCall(ps4, "POST", "/v2/install", JSONObject().put("path", path).toString(), 60_000)
+        return InstallStart(j.optInt("task_id", -1), j.optString("title_id"))
+    }
+    fun installStatus(ps4: Ps4, taskId: Int): InstallProgress {
+        val j = fsCall(ps4, "GET", "/v2/install/status?task=$taskId", null, 8000)
+        return InstallProgress(j.optLong("length"), j.optLong("transferred"), j.optInt("error_result"), j.optBoolean("done"))
     }
     /** What the console's kernel reports (only names that exist are returned). Null = not available. */
     fun sysinfo(ps4: Ps4): JSONObject? = try { fsCall(ps4, "GET", "/v2/sysinfo", null, 5000) } catch (e: Exception) { null }

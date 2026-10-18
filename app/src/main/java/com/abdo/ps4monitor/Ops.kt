@@ -59,10 +59,32 @@ object Ops {
         }
     }
 
+    /** Installs through OUR server (no ezRemote Client needed): registers the package with the console's installer and follows its progress. */
     suspend fun install(p: Ps4, paths: List<String>): String = withContext(Dispatchers.IO) {
-        val r = EzRemote.install(p, paths)
-        if (r.ok) tr("ezRemote accepted the install request. The PS4 shows the install progress itself; this app cannot track it.",
-                     "قبل ezRemote طلب التثبيت. الـPS4 يعرض تقدم التثبيت بنفسه؛ التطبيق لا يستطيع تتبّعه.") else fail(r)
+        val up = try { EzServer.isV2(p, 4000) } catch (e: Exception) { false }
+        if (!up) return@withContext tr("Our server is not running on the PS4. Choose \"Our server\" on the Home screen first.", "سيرفرنا لا يعمل على الـPS4. اختر «سيرفرنا» من الصفحة الرئيسية أولًا.")
+        if (!EzServer.installSupported(p)) return@withContext tr("The running server is too old for installing. Send the newest one: Home screen -> server -> Our server.", "السيرفر العامل قديم للتثبيت. أرسل الأحدث: الصفحة الرئيسية ← السيرفر ← سيرفرنا.")
+        val results = ArrayList<String>()
+        for (path in paths) {
+            val name = path.substringAfterLast('/')
+            if (!EzServer.fsUsable(p, path, write = false)) { results.add("$name: " + tr("not inside a folder the server may access.", "ليس داخل مجلد يسمح به السيرفر.")); continue }
+            label.value = tr("Installing ", "جارٍ التثبيت ") + name
+            val st = try { EzServer.installPkg(p, path) }
+                catch (e: EzError) { results.add("$name: " + (e.message ?: "")); continue }
+                catch (e: IOException) { results.add("$name: " + Tx.t(PkgInspector.friendly(e))); continue }
+            var bad = 0; var last = ""
+            val t0 = System.currentTimeMillis()
+            while (System.currentTimeMillis() - t0 < 6 * 3600_000L) {
+                delay(1500)
+                val pr = try { EzServer.installStatus(p, st.taskId) } catch (e: CancellationException) { throw e } catch (e: Exception) { if (++bad >= 20) { last = tr("lost contact with the server", "انقطع الاتصال بالسيرفر"); break }; continue }
+                bad = 0
+                if (pr.length > 0) label.value = tr("Installing ", "جارٍ التثبيت ") + name + "  " + (pr.transferred * 100 / pr.length) + "%"
+                if (pr.transferred > 0 && pr.errorResult != 0) { last = tr("the installer reported error ", "أبلغ المثبّت عن خطأ ") + "0x" + Integer.toHexString(pr.errorResult).uppercase(); break }
+                if (pr.done) { last = "ok"; break }
+            }
+            results.add(if (last == "ok") "$name: " + tr("the install task finished (${st.titleId}). Check Notifications on the PS4.", "اكتملت مهمة التثبيت (${st.titleId}). راجع الإشعارات على الـPS4.") else "$name: " + last.ifBlank { tr("did not finish in time", "لم تنتهِ في الوقت المحدد") })
+        }
+        results.joinToString("\n")
     }
 
     suspend fun mkdir(p: Ps4, path: String): String = withContext(Dispatchers.IO) {
