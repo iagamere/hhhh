@@ -1,4 +1,7 @@
-# PS4 Download Monitor 5.4
+# PS4 Download Monitor 5.4.1
+
+## 5.4.1
+- Fixes the compile error in VideoStream.kt (wrong import of aspectRatio).
 
 ## 5.4
 - **Delete captures from the PS4:** long-press to select (Delete button) or the trash icon in the full-screen viewer. Deleting goes through the server's `/v2/fs/delete`. The server refuses deletes in read-only folders ("Path is outside the writable folders (fs_roots)"), so before the first delete the app adds ONLY `/user/av_contents/photo` and `/user/av_contents/video` to the server's writable folders (`EzServer.allowCaptureDelete`, existing writable folders are kept). `EzServer.deleteCapture` refuses any path outside those two folders. Not undoable.
