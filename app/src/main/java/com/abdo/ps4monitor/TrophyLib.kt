@@ -31,12 +31,24 @@ object TrophyLib {
         ensureRo(ps4)
         val notes = ArrayList<String>(); val out = ArrayList<Account>()
         val l = try { EzServer.fsList(ps4, "/user/home", 8000) } catch (e: Exception) { notes += "/user/home: ${e.message}"; return out to notes }
+        val profRoot = "/system_data/priv/cache/profile"
+        val profDirs = try { EzServer.fsList(ps4, profRoot, 8000).also { notes += "$profRoot: " + it.take(20).joinToString { x -> x.name } } } catch (e: Exception) { notes += "$profRoot: ${e.message}"; emptyList() }
+        val IMG = Regex("(?i).+\\.(png|jpg|jpeg|webp)$")
+        fun images(dir: String): List<String> = try {
+            EzServer.fsList(ps4, dir, 6000).filter { !it.isDir && IMG.matches(it.name) }
+                .sortedWith(compareByDescending<FsEntry> { it.name.contains("avatar", true) }.thenByDescending { it.size }).map { "$dir/${it.name}" }
+        } catch (e: Exception) { emptyList() }
         for (d in l.filter { it.isDir && HEX8.matches(it.name) }) {
             val id = d.name.lowercase()
             val name = runCatching { String(EzServer.fsRead(ps4, "/user/home/${d.name}/username.dat", 0, 64, 5000), Charsets.UTF_8).trim { c -> c == '\u0000' || c.isWhitespace() } }.getOrDefault("").ifBlank { id }
             val av = listOf("avatar.png", "avatar440.png", "avatar260.png", "avatar128.png", "avatar64.png").flatMap { f ->
                 listOf(id, "0x$id", d.name).distinct().map { "/system_data/priv/cache/profile/$it/$f" } }
-            out += Account(d.name, name, av)
+            val dec = id.toLongOrNull(16)?.toString()
+            val found = ArrayList<String>()
+            profDirs.filter { it.isDir && (it.name.lowercase().removePrefix("0x") == id || it.name == dec) }.forEach { found += images("$profRoot/${it.name}") }
+            found += images("/user/home/${d.name}")
+            if (found.isEmpty()) notes += "No picture found for $name (looked in $profRoot and /user/home/${d.name})"
+            out += Account(d.name, name, (found + av).distinct())
         }
         if (out.isEmpty()) notes += "No account folders found under /user/home."
         return out to notes
@@ -67,6 +79,29 @@ object TrophyLib {
         val dirs = baseDirs(titleId).map { "$it/trophy" } + npwrs.flatMap { listOf("/user/trophy/conf/$it", "/user/trophy/conf/${it.substringBefore('_')}") }
         for (dir in dirs) loadPackFrom(ps4, dir, npwrs, notes)?.let { return it }
         return null
+    }
+
+    private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+    /** No NPWR id known: look through the console's shared trophy folder and take the pack whose title is this game's title. */
+    fun findPackByTitle(ps4: Ps4, gameTitle: String, notes: MutableList<String>): TrophyPack? {
+        val root = "/user/trophy/conf"
+        val dirs = try { EzServer.fsList(ps4, root, 8000).also { notes += "$root: ${it.size} entries" } } catch (e: Exception) { notes += "$root: ${e.message}"; return null }
+        val want = norm(gameTitle)
+        for (d in dirs.filter { it.isDir }.take(80)) {
+            val p = loadPackFrom(ps4, "$root/${d.name}", emptyList(), ArrayList()) ?: continue
+            val t = norm(p.title)
+            if (t.isNotEmpty() && want.isNotEmpty() && (t == want || t.contains(want) || want.contains(t))) return p
+        }
+        notes += "No pack in $root has the title \"$gameTitle\"."
+        return null
+    }
+
+    /** Lists what is really in the game's folders, for the diagnostic text. */
+    fun listing(ps4: Ps4, titleId: String): List<String> {
+        val out = ArrayList<String>()
+        for (b in baseDirs(titleId).take(3)) out += try { "$b: " + EzServer.fsList(ps4, b, 6000).take(30).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { "$b: ${e.message}" }
+        return out
     }
 
     private fun loadPackFrom(ps4: Ps4, dir: String, npwrs: List<String>, notes: MutableList<String>): TrophyPack? {
@@ -107,7 +142,7 @@ object TrophyLib {
                     .sortedBy { it.second }.forEach { (n, id) -> list += Trophy(id, "Trophy %03d".format(id), "", '?', false, n) }
             }
             if (list.isEmpty()) continue
-            val npwr = Regex("NPWR\\d{5}_\\d{2}").find(t.name)?.value ?: npwrs.getOrNull(trps.indexOf(t)) ?: npwrs.firstOrNull() ?: ""
+            val npwr = Regex("NPWR\\d{5}_\\d{2}").find(t.name)?.value ?: Regex("NPWR\\d{5}_\\d{2}").find(dir)?.value ?: npwrs.getOrNull(trps.indexOf(t)) ?: npwrs.firstOrNull() ?: ""
             return TrophyPack(npwr, title, list.sortedBy { it.id }, path, files, readable)
         }
         return null

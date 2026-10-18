@@ -98,7 +98,10 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
             val (acc, n1) = TrophyLib.accounts(ps4)
             val notes = ArrayList<String>(n1)
             val npwrs = TrophyLib.npwrIds(ps4, g.titleId, notes)
-            TrophyData(acc, TrophyLib.loadPack(ps4, g.titleId, npwrs, notes), npwrs, notes)
+            var pk = TrophyLib.loadPack(ps4, g.titleId, npwrs, notes)
+            if (pk == null) pk = TrophyLib.findPackByTitle(ps4, g.title, notes)
+            if (pk == null) notes += TrophyLib.listing(ps4, g.titleId)
+            TrophyData(acc, pk, npwrs, notes)
         }
     }
     val d = data
@@ -114,7 +117,9 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
                 }
                 Dim(tr("Their progress appears here once the game's trophy file is found.", "يظهر تقدمهم هنا عندما يُعثر على ملف إنجازات اللعبة."))
             }
-            NoteList(d.notes.take(14) + listOf(if (d.npwrs.isEmpty()) "No NPWR id found for ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}"))
+            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+            TextButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(d.notes.joinToString("\n"))) }) { Lbl(tr("Copy technical details", "نسخ التفاصيل التقنية")) }
+            NoteList(d.notes.take(40) + listOf(if (d.npwrs.isEmpty()) "No NPWR id found for ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}"))
         }
         return
     }
