@@ -68,7 +68,7 @@ object ServerSwitch {
         }
     }
 
-/** Bottom sheet opened from the server line on the Home screen: original server / our bundled server / a server built from the user's zip. */
+/** Bottom sheet opened from the server line on the Home screen: our bundled server / a server built from the user's zip. */
 @Composable fun ServerPickerSheet(ps4: Ps4, info: EzServer.ServerInfo?, onDismiss: () -> Unit, onChanged: () -> Unit) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     val bundled = remember { BundledServer.version(ctx) }
@@ -79,7 +79,6 @@ object ServerSwitch {
     var prog by remember { mutableStateOf<Float?>(null) }
     var message by remember { mutableStateOf("") }
     var details by remember { mutableStateOf("") }
-    var confirmOriginal by remember { mutableStateOf(false) }
     val customNow = info?.custom == true
     val runningVersion = if (customNow) info?.version.orEmpty() else ""
 
@@ -110,29 +109,12 @@ object ServerSwitch {
             finish(ok, if (ok) r.message + "\n" + tr("Your server is running (", "سيرفرك يعمل (") + m + ")" else r.message + "\n" + m)
         }
     }
-    fun useOriginal() {
-        launchJob {
-            stage = tr("Stopping the custom server…", "جارٍ إيقاف السيرفر المخصص…"); prog = null
-            val stopped = withContext(Dispatchers.IO) { EzServer.stop(ps4) }
-            EzServer.forget(ps4)
-            // the monitor re-sends the saved server by itself when it stops: forget the file so the original really stays
-            if (stopped) withContext(Dispatchers.IO) { ServerLoader.elfFile(ctx).delete() }
-            finish(stopped, if (stopped) tr("The custom server is stopped. Open ezRemote Client on the PS4 and restart its server to get the original one.",
-                "أُوقف السيرفر المخصص. افتح ezRemote Client على الـPS4 وأعد تشغيل خادمه للحصول على الأصلي.")
-                else tr("Could not stop the custom server.", "تعذّر إيقاف السيرفر المخصص."))
-        }
-    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? -> if (uri != null) buildFromZip(uri) }
 
     ModalBottomSheet(onDismissRequest = { if (!busy) onDismiss() }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { v -> v != SheetValue.Hidden || !busyNow.value })) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(tr("Choose the server", "اختر السيرفر"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Dim(ps4.name + "  •  " + ps4.host)
-            ChoiceRow(tr("Original ezRemote Server", "خادم ezRemote الأصلي"),
-                tr("The one that comes with ezRemote Client. One download at a time, no pause or priority.", "الذي يأتي مع ezRemote Client. تحميل واحد في كل مرة، بلا إيقاف مؤقت أو أولوية."),
-                if (info != null && !info.custom) tr("Running", "يعمل") else null, !busy) {
-                if (customNow) confirmOriginal = true else message = tr("The original server is already the one running.", "الخادم الأصلي هو العامل الآن.")
-            }
             ChoiceRow(tr("Our server", "سيرفرنا") + if (bundled.isNotBlank()) " ($bundled)" else "",
                 tr("Built into this app. Pause, resume, priorities, queue, file access, PS4 information. Needs \"Enable PayLoader Server\" in GoldHEN.",
                     "مدمج في هذا التطبيق. إيقاف مؤقت واستئناف وأولويات وقائمة انتظار ووصول للملفات ومعلومات الـPS4. يحتاج «Enable PayLoader Server» في GoldHEN."),
@@ -153,9 +135,4 @@ object ServerSwitch {
             if (!busy) TextButton(onClick = onDismiss) { Lbl(tr("Close", "إغلاق")) }
         }
     }
-    if (confirmOriginal) AlertDialog(onDismissRequest = { confirmOriginal = false },
-        title = { Text(tr("Switch to the original server?", "التحويل إلى الخادم الأصلي؟")) },
-        text = { Text(tr("This stops our server. Unfinished downloads stay on the PS4 but the original server cannot continue them by itself.", "هذا يوقف سيرفرنا. تبقى التحميلات غير المكتملة على الـPS4 لكن الخادم الأصلي لا يكملها وحده.")) },
-        confirmButton = { TextButton(onClick = { confirmOriginal = false; useOriginal() }) { Lbl(tr("Stop ours", "إيقاف سيرفرنا")) } },
-        dismissButton = { TextButton(onClick = { confirmOriginal = false }) { Lbl(tr("Cancel", "إلغاء")) } })
 }
