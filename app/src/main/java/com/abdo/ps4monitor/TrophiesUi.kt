@@ -63,11 +63,11 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
     }
 }
 
-@Composable private fun TrophyRow(ps4: Ps4, pack: TrophyPack, t: Trophy, earnedAt: Long?, known: Boolean) {
+@Composable private fun TrophyRow(ps4: Ps4, pack: TrophyPack?, t: Trophy, earnedAt: Long?, known: Boolean) {
     val got = earnedAt != null
-    val icon by produceState<Bitmap?>(null, t.id, pack.trpPath) {
-        val e = t.icon?.let { pack.files[it] }
-        if (e != null && e.second in 1..(2L shl 20)) value = withContext(Dispatchers.IO) { runCatching { Thumbs.decode(EzServer.fsRead(ps4, pack.trpPath, e.first, e.second.toInt(), 15000), 160) }.getOrNull() }
+    val icon by produceState<Bitmap?>(null, t.id, pack?.trpPath) {
+        val e = t.icon?.let { pack?.files?.get(it) }
+        if (pack != null && e != null && e.second in 1..(2L shl 20)) value = withContext(Dispatchers.IO) { runCatching { Thumbs.decode(EzServer.fsRead(ps4, pack.trpPath, e.first, e.second.toInt(), 15000), 160) }.getOrNull() }
     }
     val hiddenLocked = t.hidden && !got
     Row(Modifier.fillMaxWidth().alpha(if (got || !known) 1f else 0.55f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -107,33 +107,46 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
     val d = data
     if (d == null) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Dim(tr("Reading trophies…", "جارٍ قراءة الإنجازات…")) }; return }
     val pack = d.pack
-    if (pack == null) {
+    val states = remember(ps4.id, g.titleId) { mutableStateMapOf<String, TrophyState>() }
+    LaunchedEffect(d.accounts) {
+        val npwr = pack?.npwr?.takeIf { it.isNotBlank() } ?: d.npwrs.firstOrNull().orEmpty()
+        for (a in d.accounts) if (a.id !in states) states[a.id] = withContext(Dispatchers.IO) { runCatching { TrophyLib.state(ps4, a, npwr, ctx.cacheDir, g.title) }.getOrElse { TrophyState(null, listOf("${a.name}: ${it.message ?: it.javaClass.simpleName}")) } }
+    }
+    val loaded = d.accounts.all { it.id in states }
+    // the trophy list: the console's own database has the real names (the .trp pack may be encrypted); the pack supplies the pictures
+    val dbAny = states.values.firstNotNullOfOrNull { it.db }
+    val trophies: List<Trophy>? = dbAny?.trophies?.map { x -> Trophy(x.id, x.name.ifBlank { "Trophy %03d".format(x.id) }, x.detail, x.grade, !x.visible, pack?.trophies?.firstOrNull { it.id == x.id }?.icon) } ?: pack?.trophies
+    val readable = dbAny != null || pack?.namesReadable == true
+    if (trophies == null) {
+        if (!loaded) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Dim(tr("Reading trophies…", "جارٍ قراءة الإنجازات…")) }; return }
+        val dbNotes = states.values.flatMap { it.notes }.distinct()
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            EmptyState(R.drawable.ic_package, tr("This game has no trophy file the app can read.", "هذه اللعبة لا تحتوي ملف إنجازات يستطيع التطبيق قراءته."))
+            EmptyState(R.drawable.ic_package, tr("This game has no trophy data the app can read.", "هذه اللعبة لا تحتوي بيانات إنجازات يستطيع التطبيق قراءتها."))
             if (d.accounts.isNotEmpty()) {
                 SectionTitle(tr("Accounts on this console", "الحسابات في هذا الجهاز"))
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     d.accounts.forEach { a -> AccountCircle(ps4, a, null, false) { } }
                 }
-                Dim(tr("Their progress appears here once the game's trophy file is found.", "يظهر تقدمهم هنا عندما يُعثر على ملف إنجازات اللعبة."))
             }
+            val all = dbNotes + d.notes
             val clip = androidx.compose.ui.platform.LocalClipboardManager.current
-            TextButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(d.notes.joinToString("\n"))) }) { Lbl(tr("Copy technical details", "نسخ التفاصيل التقنية")) }
-            NoteList(d.notes.take(40) + listOf(if (d.npwrs.isEmpty()) "No NPWR id found for ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}"))
+            TextButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(all.joinToString("\n"))) }) { Lbl(tr("Copy technical details", "نسخ التفاصيل التقنية")) }
+            NoteList((listOf(if (d.npwrs.isEmpty()) "No NPWR id found for ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}") + all).take(8))
         }
         return
     }
-    val states = remember(ps4.id, g.titleId) { mutableStateMapOf<String, TrophyState>() }
-    LaunchedEffect(pack.trpPath, d.accounts) {
-        for (a in d.accounts) if (a.id !in states) states[a.id] = withContext(Dispatchers.IO) { TrophyLib.state(ps4, a, pack.npwr, ctx.cacheDir) }
-    }
     var sel by remember(g.titleId) { mutableStateOf<String?>(null) }
-    val total = pack.trophies.size
-    fun pctOf(a: Account): Int? = states[a.id]?.unlocked?.let { u -> if (total == 0) 0 else (u.keys.count { k -> pack.trophies.any { it.id == k } } * 100 / total) }
+    val total = trophies.size
+    fun pctOf(a: Account): Int? {
+        val s = states[a.id] ?: return null
+        s.db?.let { return it.title.progress.coerceIn(0, 100) }     // the console's own percentage
+        return s.unlocked?.let { u -> if (total == 0) 0 else (u.keys.count { k -> trophies.any { it.id == k } } * 100 / total) }
+    }
     // by default the account with the most progress (the one that played)
     val shownId = sel ?: d.accounts.maxByOrNull { pctOf(it) ?: -1 }?.id
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (pack.title.isNotBlank()) Dim(pack.title)
+        val title = dbAny?.title?.title?.takeIf { it.isNotBlank() } ?: pack?.title.orEmpty()
+        if (title.isNotBlank()) Dim(title)
         if (d.accounts.isEmpty()) Dim(tr("No accounts found on the console.", "لم يُعثر على حسابات في الجهاز."))
         else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             d.accounts.forEach { a -> AccountCircle(ps4, a, pctOf(a), a.id == shownId) { sel = a.id } }
@@ -143,34 +156,38 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
         if (acc != null && st == null) { LinearProgressIndicator(Modifier.fillMaxWidth()); Dim(tr("Reading ${acc.name}'s progress…", "جارٍ قراءة تقدّم ${acc.name}…")) }
         if (acc != null && st != null) {
             val u = st.unlocked
-            val earned = pack.trophies.filter { u?.containsKey(it.id) == true }
-            val pct = if (u != null && total > 0) earned.size * 100 / total else null
+            val earned = trophies.filter { u?.containsKey(it.id) == true }
+            val pct = pctOf(acc)
             Panel {
                 Text(acc.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                if (pct != null) {
+                if (pct != null && u != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("$pct%", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Dim(tr("${earned.size} of $total trophies", "${earned.size} من $total إنجازًا"))
                     }
                     LinearProgressIndicator(progress = { pct / 100f }, modifier = Modifier.fillMaxWidth())
-                    if (pack.namesReadable) FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (readable) FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         listOf('P', 'G', 'S', 'B').forEach { gr ->
-                            val all = pack.trophies.count { it.grade == gr }
+                            val all = trophies.count { it.grade == gr }
                             if (all > 0) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Box(Modifier.size(12.dp).clip(CircleShape).background(gradeColor(gr))); Text("${earned.count { it.grade == gr }}/$all", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
                     }
-                    if (pack.namesReadable) Dim(tr("Points: ", "النقاط: ") + earned.sumOf { t -> TrophyLib.points(t.grade) })
-                } else Dim(tr("This console's unlock data for this account could not be read, so the list below shows every trophy without earned marks.", "تعذّرت قراءة بيانات الإنجازات المحققة لهذا الحساب، لذلك تظهر القائمة بلا علامات تحقيق."))
+                    if (readable) Dim(tr("Points: ", "النقاط: ") + earned.sumOf { t -> TrophyLib.points(t.grade) })
+                } else Dim(tr("This game has no trophy record for this account (it has not played it, or the console's data could not be read).", "لا يوجد سجل إنجازات لهذه اللعبة في هذا الحساب (لم يلعبها، أو تعذّرت قراءة بيانات الجهاز)."))
             }
             if (u != null) {
-                val missing = pack.trophies.filter { u[it.id] == null }
+                val missing = trophies.filter { u[it.id] == null }
                 if (earned.isNotEmpty()) { SectionTitle(tr("Earned", "المحققة") + " (${earned.size})"); earned.sortedByDescending { u[it.id] ?: 0L }.forEach { TrophyRow(ps4, pack, it, u[it.id], true) } }
                 if (missing.isNotEmpty()) { SectionTitle(tr("Not earned yet", "غير محققة") + " (${missing.size})"); missing.forEach { TrophyRow(ps4, pack, it, null, true) } }
-            } else pack.trophies.forEach { TrophyRow(ps4, pack, it, null, false) }
-            if (st.unlocked == null) NoteList(st.notes + tr("Device tab > Scan trophies: send the result so the reader can be matched to this console.", "تبويب الجهاز > فحص الإنجازات: أرسل النتيجة ليُضبط القارئ على هذا الجهاز."))
+            } else trophies.forEach { TrophyRow(ps4, pack, it, null, false) }
+            if (st.unlocked == null) {
+                val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+                NoteList(st.notes + tr("Device tab > Scan trophies: send the result so the reader can be matched to this console.", "تبويب الجهاز > فحص الإنجازات: أرسل النتيجة ليُضبط القارئ على هذا الجهاز."))
+                TextButton(onClick = { clip.setText(androidx.compose.ui.text.AnnotatedString(st.notes.joinToString("\n"))) }) { Lbl(tr("Copy technical details", "نسخ التفاصيل التقنية")) }
+            }
         }
-        if (!pack.namesReadable) Dim(tr("The trophy names in this game's file are encrypted, so trophies are numbered (their pictures are real).", "أسماء الإنجازات في ملف اللعبة مشفّرة، لذلك تظهر مرقّمة (الصور حقيقية)."))
+        if (!readable) Dim(tr("The trophy names in this game's file are encrypted, so trophies are numbered (their pictures are real).", "أسماء الإنجازات في ملف اللعبة مشفّرة، لذلك تظهر مرقّمة (الصور حقيقية)."))
     }
 }

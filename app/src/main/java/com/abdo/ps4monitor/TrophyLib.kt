@@ -1,6 +1,10 @@
 package com.abdo.ps4monitor
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
 
 /** A console account: its folder id (8 hex digits under /user/home) and the name from username.dat. */
@@ -10,7 +14,12 @@ data class Trophy(val id: Int, val name: String, val detail: String, val grade: 
 /** Trophy list read from the game's own trophy pack (trp file); [files] maps entry name -> (offset, size) for the pictures. */
 data class TrophyPack(val npwr: String, val title: String, val trophies: List<Trophy>, val trpPath: String, val files: Map<String, Pair<Long, Long>>, val namesReadable: Boolean)
 /** [unlocked]: trophy id -> time (seconds, 0 when unknown); null = the console's unlock data could not be read. */
-class TrophyState(val unlocked: Map<Int, Long>?, val notes: List<String>)
+class TrophyState(val unlocked: Map<Int, Long>?, val notes: List<String>, val db: AccountDb? = null)
+/** One game's summary row of the console's trophy database (tbl_trophy_title). [counts]: grade -> (earned, total). */
+class DbTitle(val dbId: Int, val npwr: String, val title: String, val progress: Int, val total: Int, val unlockedNum: Int, val counts: Map<Char, Pair<Int, Int>>)
+/** One trophy row of tbl_trophy_flag (names and descriptions are stored in the database itself). */
+class DbTrophy(val id: Int, val group: Int, val name: String, val detail: String, val grade: Char, val unlocked: Boolean, val visible: Boolean, val time: Long)
+class AccountDb(val title: DbTitle, val trophies: List<DbTrophy>)
 
 /**
  * Trophy reader. What is VERIFIED from public documentation and what is a GUESS:
@@ -25,7 +34,7 @@ object TrophyLib {
     private val roSent = ConcurrentHashMap.newKeySet<String>()
 
     /** The account folders and the profile-picture folders must be readable by the server (sent once per PS4 per app run). */
-    private fun ensureRo(ps4: Ps4) { if (roSent.add(ps4.id)) runCatching { EzServer.setRoExtra(ps4, EzServer.roExtra().joinToString("\n")) } }
+    private fun ensureRo(ps4: Ps4) { if (roSent.add(ps4.id)) { val ok = runCatching { EzServer.setRoExtra(ps4, EzServer.roExtra().joinToString("\n")) == null }.getOrDefault(false); if (!ok) roSent.remove(ps4.id) } }
 
     fun accounts(ps4: Ps4): Pair<List<Account>, List<String>> {
         ensureRo(ps4)
@@ -149,6 +158,7 @@ object TrophyLib {
     }
 
     private val sig = ConcurrentHashMap<String, String>()
+    private val genericNotes = ConcurrentHashMap<String, List<String>>()
     private fun localCopy(ps4: Ps4, path: String, e: FsEntry, cache: File): File? {
         val f = File(cache, "trop_" + (ps4.id + path).hashCode().toUInt().toString(16) + ".db")
         val s = "${e.size}|${e.mtime}"
@@ -167,9 +177,93 @@ object TrophyLib {
 
     private fun toSeconds(v: Long): Long = when { v > 100_000_000_000_000L -> v / 1_000_000; v > 100_000_000_000L -> v / 1000; else -> v }
 
+    private fun Cursor.int(n: String): Int { val k = getColumnIndex(n); return if (k < 0 || isNull(k)) 0 else try { getInt(k) } catch (e: Exception) { 0 } }
+    private fun Cursor.str(n: String): String { val k = getColumnIndex(n); return if (k < 0 || isNull(k)) "" else try { getString(k) ?: "" } catch (e: Exception) { "" } }
+    private fun gradeOf(v: Int): Char = when (v) { 1 -> 'P'; 2 -> 'G'; 3 -> 'S'; 4 -> 'B'; else -> '?' }
+    /** tbl_trophy_flag.time_unlocked is text like 2024-05-01T12:30:00.00Z (an unlocked-never placeholder is an old date); a number is also accepted. */
+    private fun parseTime(s: String): Long {
+        if (s.isBlank()) return 0L
+        s.toLongOrNull()?.let { return toSeconds(it) }
+        return try {
+            val f = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US); f.timeZone = TimeZone.getTimeZone("UTC")
+            val t = (f.parse(s.take(19).replace(' ', 'T'))?.time ?: 0L) / 1000
+            if (t < 86400L * 366) 0L else t
+        } catch (e: Exception) { 0L }
+    }
+
+    private fun copyTo(ps4: Ps4, path: String, e: FsEntry, dest: File): Boolean =
+        try { dest.outputStream().use { EzServer.fsCopyTo(ps4, path, e.size, it) { } }; true } catch (ex: Exception) { dest.delete(); false }
+
+    /**
+     * The console keeps every account's trophies in /user/home/<id>/trophy/db/trophy_local.db (SQLite). Layout taken from the open-source tool
+     * Apollo (bucanero/apollo-ps4, saves.c / sqlite_db.c), which reads and edits that same file:
+     *   tbl_trophy_title(id, trophy_title_id = NPWR id, title, trophy_num, unlocked_trophy_num, progress, platinum_num, unlocked_platinum_num, gold_..., silver_..., bronze_..., status)
+     *   tbl_trophy_flag(title_id = tbl_trophy_title.id, trophyid, groupid, title, description, grade 1..4 = P/G/S/B, unlocked, visible, time_unlocked)
+     * Not verified here on a console: that the read-only folders let the server hand over this file, and that the file is not mid-write.
+     */
+    /** [opened] is set once the database itself was read, so "this account has no record of the game" can be told from "the file could not be read". */
+    fun accountDb(ps4: Ps4, account: Account, npwr: String, gameTitle: String, cache: File, notes: MutableList<String>, opened: BooleanArray = BooleanArray(1)): AccountDb? {
+        val dir = "/user/home/${account.id}/trophy/db"
+        val l = try { EzServer.fsList(ps4, dir, 8000) } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
+        val main = l.firstOrNull { it.name == "trophy_local.db" && !it.isDir }
+        if (main == null) { notes += "$dir has no trophy_local.db (found: " + l.take(12).joinToString { it.name } + ")"; return null }
+        val base = File(cache, "troph_" + (ps4.id + account.id).hashCode().toUInt().toString(16) + ".db")
+        val wal = l.firstOrNull { it.name == "trophy_local.db-wal" && !it.isDir }
+        val s = "${main.size}|${main.mtime}|${wal?.size}|${wal?.mtime}"
+        if (!(base.exists() && sig[base.name] == s)) {
+            File(base.path + "-wal").delete(); File(base.path + "-shm").delete(); File(base.path + "-journal").delete()
+            if (!copyTo(ps4, "$dir/${main.name}", main, base)) { notes += "$dir/${main.name}: could not be copied"; return null }
+            val walOk = wal == null || wal.size <= 0 || copyTo(ps4, "$dir/${wal.name}", wal, File(base.path + "-wal"))
+            if (!walOk) notes += "the -wal file could not be copied (recent trophies may be missing)" else sig[base.name] = s
+        }
+        return try {
+            // this is only a cache copy: read-write is the fallback because a read-only connection to a WAL database can fail on older Android
+            val db = try { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READONLY) } catch (e: Exception) { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READWRITE) }
+            try {
+                val titles = ArrayList<Pair<DbTitle, Int>>()
+                db.rawQuery("select * from tbl_trophy_title", null).use { c ->
+                    while (c.moveToNext()) {
+                        fun g(p: String, u: String) = c.int("${p}_num").let { tot -> c.int("unlocked_${p}_num") to tot }
+                        val counts = LinkedHashMap<Char, Pair<Int, Int>>()
+                        for ((ch, nm) in listOf('P' to "platinum", 'G' to "gold", 'S' to "silver", 'B' to "bronze")) { val (e, tot) = g(nm, nm); if (tot > 0) counts[ch] = e to tot }
+                        titles += DbTitle(c.int("id"), c.str("trophy_title_id"), c.str("title"), c.int("progress"), c.int("trophy_num"), c.int("unlocked_trophy_num"), counts) to c.int("status")
+                    }
+                }
+                opened[0] = true
+                if (titles.isEmpty()) { notes += "tbl_trophy_title is empty for ${account.name}"; return null }
+                val live = titles.filter { it.second == 0 }.ifEmpty { titles }.map { it.first }
+                val key = npwr.substringBefore('_')
+                val want = norm(gameTitle)
+                val pick = live.firstOrNull { npwr.isNotEmpty() && it.npwr.equals(npwr, true) }
+                    ?: live.firstOrNull { key.isNotEmpty() && it.npwr.startsWith(key, true) }
+                    ?: live.firstOrNull { want.isNotEmpty() && norm(it.title) == want }
+                    ?: live.filter { want.isNotEmpty() && norm(it.title).let { x -> x.isNotEmpty() && (x.contains(want) || want.contains(x)) } }
+                        .minByOrNull { Math.abs(norm(it.title).length - want.length) }
+                if (pick == null) { notes += "${account.name}: this game is not in the trophy database (${live.size} games there; wanted ${npwr.ifBlank { gameTitle }})"; return null }
+                val list = ArrayList<DbTrophy>()
+                db.rawQuery("select * from tbl_trophy_flag where title_id = ? order by trophyid", arrayOf(pick.dbId.toString())).use { c ->
+                    while (c.moveToNext()) list += DbTrophy(c.int("trophyid"), c.int("groupid"), c.str("title"), c.str("description"), gradeOf(c.int("grade")),
+                        c.int("unlocked") != 0, c.int("visible") != 0, parseTime(c.str("time_unlocked")))
+                }
+                // the group row (trophyid of the base-game "group" entry) is not a trophy: Apollo lists only rows of tbl_trophy_flag, so keep them all except negative ids
+                AccountDb(pick, list.filter { it.id >= 0 })
+            } finally { db.close() }
+        } catch (ex: Exception) { notes += "trophy_local.db (${account.name}): ${ex.message}"; null }
+    }
+
     /** Unlocked trophies of [account] for the game with NPWR id [npwr]. */
-    fun state(ps4: Ps4, account: Account, npwr: String, cache: File): TrophyState {
-        val notes = ArrayList<String>(); val dbs = ArrayList<Pair<String, FsEntry>>()
+    fun state(ps4: Ps4, account: Account, npwr: String, cache: File, gameTitle: String = ""): TrophyState {
+        run {
+            val n = ArrayList<String>()
+            val opened = BooleanArray(1)
+            val r = accountDb(ps4, account, npwr, gameTitle, cache, n, opened)
+            if (r != null) return TrophyState(r.trophies.filter { it.unlocked }.associate { it.id to it.time }, n, r)
+            // the database was read and simply has no entry for this game: this account has not played it (0%), no need to scan other files
+            if (opened[0]) return TrophyState(emptyMap(), n)
+            // otherwise fall through to the generic search below; keep the reason
+            genericNotes[account.id] = n
+        }
+        val notes = ArrayList<String>(genericNotes[account.id].orEmpty()); val dbs = ArrayList<Pair<String, FsEntry>>()
         walkDbs(ps4, "/user/home/${account.id}/trophy", 0, dbs, notes)
         if (dbs.isEmpty()) { notes += "No trophy database found for this account."; return TrophyState(null, notes) }
         val key = npwr.substringBefore('_').removePrefix("NPWR")

@@ -1,3 +1,12 @@
+# PS4 Download Monitor 5.7.1
+
+## 5.7.1 trophies read from the console's own database
+- **Why trophies did not show:** the reader looked for the game's NPWR id inside `tbl_trophy_flag.title_id`, but that column is a NUMBER (the row id of the game in `tbl_trophy_title`), so nothing ever matched; and the unlock time is text (`2024-05-01T12:30:00.00Z`), not a number.
+- **Now (`TrophyLib.accountDb`):** each account's `/user/home/<id>/trophy/db/trophy_local.db` is copied (with its `-wal` file when present) and read with the layout used by the open-source tool Apollo (bucanero/apollo-ps4): `tbl_trophy_title` (NPWR id, title, counts, **progress %**) and `tbl_trophy_flag` (trophy id, **name, description**, grade 1-4, unlocked, visible, time). The game is matched by NPWR id, then by title.
+- The trophy list, names, grades, earned marks, per-grade counts and the **console's own completion % per account** now come from that database; the game's .trp file is only used for the pictures (and as a fallback when the database cannot be read). Accounts that never played the game show "no trophy record".
+- Still NOT verified on a console: that the server can hand over `trophy_local.db` (it is inside /user/home, a read-only folder the app already enables), that the console's SQLite version/journal state opens on Android, and whether names are in the console's language. If the screen still shows nothing, tap "Copy technical details" and send it.
+- NOT compiled.
+
 # PS4 Download Monitor 5.7
 
 ## 5.7 (goes with ezRemote Server 2.0.0-abdo12): install and copy through our server
