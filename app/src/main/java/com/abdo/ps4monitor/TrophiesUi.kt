@@ -148,7 +148,7 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
                             }
                         }
                     }
-                    if (pack.namesReadable) Dim(tr("Points: ", "النقاط: ") + earned.sumOf { TrophyLib.points(it.grade) })
+                    if (pack.namesReadable) Dim(tr("Points: ", "النقاط: ") + earned.sumOf { t -> TrophyLib.points(t.grade) })
                 } else Dim(tr("This console's unlock data for this account could not be read, so the list below shows every trophy without earned marks.", "تعذّرت قراءة بيانات الإنجازات المحققة لهذا الحساب، لذلك تظهر القائمة بلا علامات تحقيق."))
             }
             if (u != null) {

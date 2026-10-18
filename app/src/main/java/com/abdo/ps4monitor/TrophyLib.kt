@@ -14,7 +14,7 @@ class TrophyState(val unlocked: Map<Int, Long>?, val notes: List<String>)
 
 /**
  * Trophy reader. What is VERIFIED from public documentation and what is a GUESS:
- *  - the game's trophy pack (sce_sys/trophy/*.trp, big-endian table of files) and npbind.dat holding the NPWR id: documented layout.
+ *  - the game's trophy pack (the .trp files in sce_sys/trophy, big-endian table of files) and npbind.dat holding the NPWR id: documented layout.
  *  - the trophy names are plain XML (TROP.SFM / TROPCONF.SFM) only in some packs; if they are encrypted the list shows numbered trophies with their pictures.
  *  - WHERE the console keeps each account's unlocked trophies is NOT verified: the reader searches the account's trophy folder for SQLite files and
  *    matches tables by column names. If nothing matches the screen says so and lists what it found (use Device > Scan trophies and send the result).
