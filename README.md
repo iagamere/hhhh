@@ -1,4 +1,7 @@
-# PS4 Download Monitor 5.3.1
+# PS4 Download Monitor 5.3.2
+
+## 5.3.2
+- Captures are read ONLY from `/user/av_contents/photo` and `/user/av_contents/video` (Ps4Info.scanCaptures). Other folders under av_contents and the extra read-only folders are no longer scanned for captures. If those two folders do not exist on the console the list is empty and the technical notes say which path was refused.
 
 ## 5.3.1 = 5.2.3 (auto-discovery, clearer send errors) + the 5.3 PS4 information work
 - Merged from your separate 5.3: Capture/Games screens, Thumbs fix, one-tap save to gallery, wider read-only folders (EzServer.RO_DEFAULT), manifest storage permission for Android 8/9, App.kt init.

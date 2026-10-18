@@ -46,8 +46,8 @@ object Ps4Info {
     fun scanCaptures(ps4: Ps4, limit: Int = 2000, maxDirs: Int = 400): CaptureScan {
         val notes = ArrayList<String>(); val out = ArrayList<Capture>()
         var dirs = 0; var truncated = false
-        val all = (listOf(CAPTURE_ROOT) + EzServer.roExtra().filter { it.contains("av_contents") || it.contains("capture", true) }).distinct()
-        val roots = all.filter { r -> all.none { o -> o != r && r.startsWith("$o/") } }
+        // only these two folders: anything else under av_contents (previews, thumbnails...) is ignored on purpose
+        val roots = listOf("$CAPTURE_ROOT/photo", "$CAPTURE_ROOT/video")
         val stack = ArrayDeque<Triple<String, Int, String>>()
         roots.forEach { stack.add(Triple(it, 0, "")) }
         while (stack.isNotEmpty()) {
