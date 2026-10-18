@@ -96,8 +96,9 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
     LaunchedEffect(ps4.id, g.titleId) {
         data = withContext(Dispatchers.IO) {
             val (acc, n1) = TrophyLib.accounts(ps4)
-            val npwrs = TrophyLib.npwrIds(ps4, g.titleId)
-            TrophyData(acc, TrophyLib.loadPack(ps4, g.titleId, npwrs), npwrs, n1)
+            val notes = ArrayList<String>(n1)
+            val npwrs = TrophyLib.npwrIds(ps4, g.titleId, notes)
+            TrophyData(acc, TrophyLib.loadPack(ps4, g.titleId, npwrs, notes), npwrs, notes)
         }
     }
     val d = data
@@ -106,7 +107,14 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
     if (pack == null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             EmptyState(R.drawable.ic_package, tr("This game has no trophy file the app can read.", "هذه اللعبة لا تحتوي ملف إنجازات يستطيع التطبيق قراءته."))
-            NoteList(d.notes + listOf(if (d.npwrs.isEmpty()) "No NPWR id in npbind.dat of ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}; no readable .trp in /user/app/${g.titleId}/sce_sys/trophy."))
+            if (d.accounts.isNotEmpty()) {
+                SectionTitle(tr("Accounts on this console", "الحسابات في هذا الجهاز"))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    d.accounts.forEach { a -> AccountCircle(ps4, a, null, false) { } }
+                }
+                Dim(tr("Their progress appears here once the game's trophy file is found.", "يظهر تقدمهم هنا عندما يُعثر على ملف إنجازات اللعبة."))
+            }
+            NoteList(d.notes.take(14) + listOf(if (d.npwrs.isEmpty()) "No NPWR id found for ${g.titleId}." else "NPWR: ${d.npwrs.joinToString()}"))
         }
         return
     }

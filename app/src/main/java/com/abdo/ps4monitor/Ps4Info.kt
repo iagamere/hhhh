@@ -90,7 +90,7 @@ object Ps4Info {
         return m
     }
 
-    private val META_DIRS = listOf("/user/appmeta", "/system_data/priv/appmeta")
+    internal val META_DIRS = listOf("/user/appmeta", "/system_data/priv/appmeta")
     private val GAME_DIRS = listOf("/user/app", "/user/appmeta")
 
     /** Installed titles: folder names of /user/app (or /user/appmeta), enriched from each title's param.sfo when the console lets us read it. */

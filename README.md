@@ -1,4 +1,4 @@
-# PS4 Download Monitor 5.6.1
+# PS4 Download Monitor 5.6.2
 
 ## 5.6 game library (captures + trophies per game)
 - Tap a game: the sheet now has three tabs: **Details**, **Captures** (only that game's screenshots and videos, same viewer / save / delete as the Captures tab) and **Trophies**.

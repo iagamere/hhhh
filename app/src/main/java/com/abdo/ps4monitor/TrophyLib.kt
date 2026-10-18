@@ -46,20 +46,32 @@ object TrophyLib {
     private fun be64(b: ByteArray, o: Int) = (be32(b, o) shl 32) or be32(b, o + 4)
 
     /** The game's NPWR id(s) from npbind.dat (searched as text: the file is a small binary table of ids). */
-    fun npwrIds(ps4: Ps4, titleId: String): List<String> {
-        for (p in listOf("/user/app/$titleId/sce_sys/npbind.dat", "/user/app/$titleId/npbind.dat")) {
-            val b = try { EzServer.fsRead(ps4, p, 0, 256 * 1024, 6000) } catch (e: Exception) { continue }
+    /** Folders where a game's own files may be: the app-meta folders hold the extracted sce_sys files (param.sfo, npbind.dat, trophy/), so they come first. */
+    fun baseDirs(titleId: String): List<String> = Ps4Info.META_DIRS.map { "$it/$titleId" } + listOf("/user/app/$titleId/sce_sys", "/user/app/$titleId")
+
+    fun npwrIds(ps4: Ps4, titleId: String, notes: MutableList<String> = ArrayList()): List<String> {
+        for (base in baseDirs(titleId)) {
+            val p = "$base/npbind.dat"
+            val b = try { EzServer.fsRead(ps4, p, 0, 256 * 1024, 6000) } catch (e: Exception) { notes += "$p: ${e.message}"; continue }
             val ids = NPWR.findAll(String(b, Charsets.ISO_8859_1)).map { it.value }.distinct().toList()
             if (ids.isNotEmpty()) return ids
+            notes += "$p: read (${b.size} bytes) but no NPWR id inside"
         }
+        // last resort: the console's shared trophy folder is named by NPWR id (only usable when exactly one is found for this game, which cannot be known here): not guessed
         return emptyList()
     }
 
     private fun unesc(s: String) = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&#39;", "'").trim()
 
-    fun loadPack(ps4: Ps4, titleId: String, npwrs: List<String>): TrophyPack? {
-        val dir = "/user/app/$titleId/sce_sys/trophy"
-        val trps = try { EzServer.fsList(ps4, dir, 8000).filter { !it.isDir && it.name.endsWith(".trp", true) }.sortedBy { it.name } } catch (e: Exception) { return null }
+    fun loadPack(ps4: Ps4, titleId: String, npwrs: List<String>, notes: MutableList<String> = ArrayList()): TrophyPack? {
+        val dirs = baseDirs(titleId).map { "$it/trophy" } + npwrs.flatMap { listOf("/user/trophy/conf/$it", "/user/trophy/conf/${it.substringBefore('_')}") }
+        for (dir in dirs) loadPackFrom(ps4, dir, npwrs, notes)?.let { return it }
+        return null
+    }
+
+    private fun loadPackFrom(ps4: Ps4, dir: String, npwrs: List<String>, notes: MutableList<String>): TrophyPack? {
+        val trps = try { EzServer.fsList(ps4, dir, 8000).filter { !it.isDir && it.name.endsWith(".trp", true) }.sortedBy { it.name } } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
+        if (trps.isEmpty()) notes += "$dir: no .trp file"
         for (t in trps) {
             val path = "$dir/${t.name}"
             val head = try { EzServer.fsRead(ps4, path, 0, 64, 8000) } catch (e: Exception) { continue }
