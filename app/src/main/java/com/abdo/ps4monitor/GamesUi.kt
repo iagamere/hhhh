@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable internal fun GamesTab(ps4: Ps4, reload: Int) {
@@ -37,20 +39,21 @@ import kotlinx.coroutines.withContext
     var done by remember(ps4.id, reload) { mutableIntStateOf(0) }; var total by remember(ps4.id, reload) { mutableIntStateOf(0) }
     var q by rememberSaveable { mutableStateOf("") }
     var open by remember { mutableStateOf<GameInfo?>(null) }
+    var gone by remember(ps4.id, reload) { mutableStateOf(setOf<String>()) }     // games deleted from this screen
     LaunchedEffect(ps4.id, reload) { res = null; res = withContext(Dispatchers.IO) { Ps4Info.scanGames(ps4) { d, t -> done = d; total = t } } }
     val r = res
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (r == null) { LinearProgressIndicator(progress = { if (total > 0) done.toFloat() / total else 0f }, modifier = Modifier.fillMaxWidth()); Dim(tr("Reading installed games…", "جارٍ قراءة الألعاب المثبتة…") + if (total > 0) " $done/$total" else ""); return@Column }
         if (r.first.isEmpty()) { EmptyState(R.drawable.ic_package, tr("No installed games found.", "لم يُعثر على ألعاب مثبتة.")); NoteList(r.second); return@Column }
         OutlinedTextField(q, { q = it }, label = { Text(tr("Search", "بحث") + " (${r.first.size})") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        val list = r.first.filter { q.isBlank() || it.title.contains(q, true) || it.titleId.contains(q, true) }
+        val list = r.first.filter { it.titleId !in gone && (q.isBlank() || it.title.contains(q, true) || it.titleId.contains(q, true)) }
         LazyVerticalGrid(GridCells.Adaptive(128.dp), Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 24.dp)) {
             items(list, key = { it.titleId }) { g -> GameCard(ps4, g) { open = g } }
             item(span = { GridItemSpan(maxLineSpan) }) { NoteList(r.second) }
         }
     }
-    open?.let { GameSheet(ps4, it) { open = null } }
+    open?.let { GameSheet(ps4, it, onDeleted = { id -> gone = gone + id }) { open = null } }
 }
 
 /** One game: the square cover (icon0.png is 512x512, shown 1:1 so nothing is stretched or cut), then its name and id. */
@@ -82,7 +85,7 @@ import kotlinx.coroutines.withContext
 }
 
 /** Details of one game: background picture (pic1/pic0), cover, name and everything param.sfo says about it. */
-@Composable private fun GameSheet(ps4: Ps4, g: GameInfo, onClose: () -> Unit) {
+@Composable private fun GameSheet(ps4: Ps4, g: GameInfo, onDeleted: (String) -> Unit, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val clip = LocalClipboardManager.current
     val iconPaths = remember(g.titleId, g.metaDir) { Ps4Info.art(g, "icon0.png") }
@@ -131,7 +134,65 @@ import kotlinx.coroutines.withContext
                 FilledTonalButton(onClick = { clip.setText(AnnotatedString(g.titleId)); Toast.makeText(ctx, tr("Copied", "تم النسخ"), Toast.LENGTH_SHORT).show() }) {
                     Ico(R.drawable.ic_copy, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Copy title ID", "نسخ معرّف اللعبة"))
                 }
+                if (DeletePolicy.isGameId(g.titleId)) DeleteGameSection(ps4, g, onDeleted, onClose)
             }
         }
+    }
+}
+
+/**
+ * Delete the game completely. Two dialogs: the first says what is removed and what stays, the second is a final warning whose button only
+ * becomes active after a few seconds. Needs "Allow deleting" in the Storage tab. Only CUSA games (see DeletePolicy.gameTargets).
+ */
+@Composable private fun DeleteGameSection(ps4: Ps4, g: GameInfo, onDeleted: (String) -> Unit, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var step by remember(g.titleId) { mutableIntStateOf(0) }          // 0 none, 1 first dialog, 2 final warning, 3 deleting
+    var result by remember(g.titleId) { mutableStateOf<DeleteResult?>(null) }
+    val allowed = EzServer.deleteAllowed()
+    HorizontalDivider()
+    Text(tr("Delete game", "حذف اللعبة"), fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error)
+    Dim(tr("Removes the game, its update and its add-on content from the console. Saved games and trophies stay.", "يزيل اللعبة وتحديثها ومحتواها الإضافي من الجهاز. الحفظ (Save) والإنجازات تبقى."))
+    if (!allowed) Dim(tr("Turn on “Allow deleting” in the Storage tab first.", "فعّل «السماح بالحذف» من تبويب التخزين أولًا."))
+    OutlinedButton(enabled = allowed && step == 0, onClick = { step = 1 }, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+        Ico(R.drawable.ic_delete, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Delete this game…", "حذف هذه اللعبة…"))
+    }
+    if (step == 1) AlertDialog(onDismissRequest = { step = 0 },
+        title = { Text(tr("Delete “${g.title}”?", "حذف «${g.title}»؟")) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(tr("These will be deleted from the PS4:", "سيُحذف التالي من الـPS4:"))
+            Text("• " + tr("the game itself (${g.titleId})", "اللعبة نفسها (${g.titleId})"))
+            Text("• " + tr("its installed update and add-on content", "تحديثها ومحتواها الإضافي المثبّت"))
+            Text(tr("Kept: saved games, trophies, captures.", "تبقى: الحفظ (Save) والإنجازات واللقطات."), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(tr("Close the game on the PS4 first if it is running.", "أغلق اللعبة على الـPS4 أولًا إن كانت تعمل."), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } },
+        confirmButton = { TextButton(onClick = { step = 2 }) { Lbl(tr("Continue", "متابعة")) } },
+        dismissButton = { TextButton(onClick = { step = 0 }) { Lbl(tr("Cancel", "إلغاء")) } })
+    if (step == 2) {
+        var left by remember { mutableIntStateOf(4) }
+        LaunchedEffect(Unit) { while (left > 0) { delay(1000); left-- } }
+        AlertDialog(onDismissRequest = { step = 0 },
+            icon = { Ico(R.drawable.ic_warning, 28.dp, MaterialTheme.colorScheme.error) },
+            title = { Text(tr("Final warning", "تحذير أخير")) },
+            text = { Text(tr("This will delete “${g.title}” COMPLETELY from the console. It cannot be undone: to play it again you would have to download and install it again.",
+                "سيحذف هذا «${g.title}» كليًا من الجهاز. لا يمكن التراجع: لتلعبها مجددًا يجب تحميلها وتثبيتها من جديد.")) },
+            confirmButton = { TextButton(enabled = left == 0, onClick = {
+                step = 3
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { StorageOps.deleteGame(ps4, g.titleId) }
+                    result = r; step = 0
+                }
+            }) { Lbl(tr("Delete completely", "حذف نهائيًا") + if (left > 0) " ($left)" else "", color = if (left == 0) MaterialTheme.colorScheme.error else Color.Unspecified) } },
+            dismissButton = { TextButton(onClick = { step = 0 }) { Lbl(tr("Keep the game", "الإبقاء على اللعبة")) } })
+    }
+    if (step == 3) AlertDialog(onDismissRequest = { },
+        title = { Text(tr("Deleting…", "جارٍ الحذف…")) },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(tr("Keep the app open. This can take a few minutes.", "أبقِ التطبيق مفتوحًا. قد يستغرق بضع دقائق.")) } },
+        confirmButton = { })
+    result?.let { r ->
+        AlertDialog(onDismissRequest = { result = null; if (r.ok) { onDeleted(g.titleId); onClose() } },
+            title = { Text(if (r.ok) tr("Done", "تم") else tr("Not finished", "لم يكتمل")) },
+            text = { Text(r.message + if (r.ok) "\n\n" + tr("If the icon is still on the PS4 home screen, press Options > Delete on it there to clear it.",
+                "إن بقيت الأيقونة في الشاشة الرئيسية للـPS4 فاضغط عليها Options ← Delete لإزالتها.") else "") },
+            confirmButton = { TextButton(onClick = { result = null; if (r.ok) { onDeleted(g.titleId); onClose() } }) { Lbl("OK") } })
     }
 }

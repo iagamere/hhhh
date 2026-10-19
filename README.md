@@ -1,4 +1,20 @@
-# PS4 Download Monitor 5.7.3
+# PS4 Download Monitor 5.7.5
+
+## 5.7.5 storage browser, safe delete, delete a game
+- **Storage tab > Browse files:** lists every folder the server may read (the same list as Device > "Folders the app may read"), with each file's size and date. "Measure this folder" / "Size" add up a folder by walking it (stops at 3000 folders). Every row shows a lock when this app would never delete it; tap the lock for the reason.
+- **Deleting is OFF by default** (Storage tab > Deleting > "Allow deleting from this app"). Nothing is deleted from the Storage or Games screens until you switch it on.
+- **What can be deleted** (`DeletePolicy.kt`, one place, re-checked right before every request): only items strictly INSIDE the capture folders, the PS4's download folder (from the PS4 settings) or a USB drive (/mnt/usbN, not folders that look like console data). One confirmation per item.
+- **Never deleted, whatever is tapped:** top-level folders, /system*, /user/home (accounts), /user/system, trophies, save data, /data/GoldHEN, /data/etaHEN, /data/ezremote-client, /data/payloads, installed game folders, eboot.bin / param.sfo / sce_sys / sce_module / *.sprx / *.self / *.prx, the folder roots themselves, and any path with "..", empty or relative parts. A misconfigured download folder (e.g. /data or a system path) is ignored as a zone. Tested with ~100 cases (`DeletePolicy` runs on the JVM alone).
+- **Delete a game:** Games tab > tap a game > "Delete this game…" (CUSA ids only; system apps NPXS never). Two dialogs: the first says what goes and what stays, the second is a "Final warning" whose button unlocks after 4 s. It removes `/user/app/<id>`, `/user/patch/<id>` and `/user/addcont/<id>`. Saves, trophies, captures and the title's artwork/metadata are NOT touched.
+- **Important limit:** our server has no "uninstall" call, so the console's application database is not edited. After deleting, the game's icon can stay on the PS4 home screen; press Options > Delete on it there to clear it. Games installed on extended storage (/mnt/ext0) are not handled.
+- While deleting, the server's writable folders are widened only for that operation (`/user/app`, `/user/patch`, `/user/addcont` for a game; the zone for a file) and put back afterwards. If the app is killed in the middle they stay open until the next change.
+- If the server's own recursive delete fails, the app deletes the folder piece by piece (files, then folders), checking the policy for every path.
+- NOT compiled here (no Android SDK) and NOT tried on a console: especially that /v2/fs/delete removes a non-empty folder in one call (the fallback exists in case it does not), and the game-delete result on the home screen.
+
+# PS4 Download Monitor 5.7.4
+
+## 5.7.4 trophy files before/after
+Device tab > "Trophy files: before / after": Snapshot, earn a trophy on the PS4, Compare. Read-only; reports which files changed (name, size, modified time). Content changes with identical size and time are not detected. Nothing about where unsynced trophies live is assumed.
 
 ## 5.7.3 trophies from trophy_net.db
 - Your notes showed the real layout of `/user/home/<id>/trophy/db/trophy_net.db` (titles, trophies, users, user_title_map, user_trophy_map). The trophy screen now reads it: names, descriptions, hidden flags, earned marks with time, the progress % and per-grade counts of the account, and the trophy pictures (the file only holds web addresses, so the PHONE downloads them from the internet).

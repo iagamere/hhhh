@@ -6,6 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -74,21 +77,34 @@ import org.json.JSONObject
 // ---------------------------------------------------------------- storage
 @Composable private fun StorageTab(ps4: Ps4, reload: Int) {
     var res by remember(ps4.id, reload) { mutableStateOf<Pair<List<Volume>, List<String>>?>(null) }
+    var browsing by rememberSaveable { mutableStateOf(false) }
+    var delOn by remember { mutableStateOf(EzServer.deleteAllowed()) }
     LaunchedEffect(ps4.id, reload) { res = null; res = withContext(Dispatchers.IO) { Ps4Info.storage(ps4) } }
+    if (browsing) { StorageBrowser(ps4, delOn) { browsing = false }; return }
     val r = res
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-        if (r == null) { item { LinearProgressIndicator(Modifier.fillMaxWidth()) }; return@LazyColumn }
-        if (r.first.isEmpty()) item { EmptyState(R.drawable.ic_folder, tr("The console did not report any storage.", "لم يُبلغ الجهاز عن أي تخزين.")) }
-        items(r.first, key = { it.path }) { v ->
-            val used = (v.total - v.free).coerceAtLeast(0)
-            Panel {
-                Text(v.label, fontWeight = FontWeight.SemiBold)
-                LinearProgressIndicator(progress = { (used.toDouble() / v.total).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                Text(tr("Free", "المتبقي") + ": " + Fmt.bytes(v.free) + "   •   " + tr("Used", "المستخدم") + ": " + Fmt.bytes(used))
-                Dim(tr("Total", "الإجمالي") + ": " + Fmt.bytes(v.total) + "  •  " + v.path)
+        if (r == null) { item { LinearProgressIndicator(Modifier.fillMaxWidth()) } }
+        else {
+            if (r.first.isEmpty()) item { EmptyState(R.drawable.ic_folder, tr("The console did not report any storage.", "لم يُبلغ الجهاز عن أي تخزين.")) }
+            items(r.first, key = { it.path }) { v ->
+                val used = (v.total - v.free).coerceAtLeast(0)
+                Panel {
+                    Text(v.label, fontWeight = FontWeight.SemiBold)
+                    LinearProgressIndicator(progress = { (used.toDouble() / v.total).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    Text(tr("Free", "المتبقي") + ": " + Fmt.bytes(v.free) + "   •   " + tr("Used", "المستخدم") + ": " + Fmt.bytes(used))
+                    Dim(tr("Total", "الإجمالي") + ": " + Fmt.bytes(v.total) + "  •  " + v.path)
+                }
             }
         }
-        item { NoteList(r.second) }
+        item {
+            Panel {
+                Text(tr("What is on the console", "ما الموجود على الجهاز"), fontWeight = FontWeight.SemiBold)
+                Dim(tr("Browse the folders the server can read: see every file and folder with its size, and which ones are protected.", "تصفّح المجلدات التي يقرؤها الخادم: كل ملف ومجلد مع حجمه، وأيها محمي."))
+                Button(onClick = { browsing = true }) { Ico(R.drawable.ic_folder, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Browse files", "تصفّح الملفات")) }
+            }
+        }
+        item { DeleteSettingsPanel(delOn) { delOn = it; EzServer.setDeleteAllowed(it) } }
+        if (r != null) item { NoteList(r.second) }
     }
 }
 
@@ -102,6 +118,9 @@ import org.json.JSONObject
     var msg by remember { mutableStateOf("") }
     var trop by remember { mutableStateOf<List<String>?>(null) }
     var tropBusy by remember { mutableStateOf(false) }
+    var snapBusy by remember { mutableStateOf(false) }
+    var snapLines by remember { mutableStateOf<List<String>?>(null) }
+    var snapSavedAt by remember { mutableStateOf(TrophySnap.saved(ps4)?.at ?: 0L) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var info by remember(ps4.id, reload) { mutableStateOf<EzServer.ServerInfo?>(null) }
@@ -143,6 +162,34 @@ import org.json.JSONObject
                 trop?.let { l ->
                     TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(l.joinToString("\n"))) }) { Lbl(tr("Copy result", "نسخ النتيجة")) }
                     l.forEach { Dim(it) }
+                }
+            }
+        }
+        item {
+            Panel {
+                Text(tr("Trophy files: before / after", "ملفات الإنجازات: قبل / بعد"), fontWeight = FontWeight.SemiBold)
+                Dim(tr("1) Press Snapshot. 2) Earn one easy trophy on the PS4 (offline if you can). 3) Press Compare and send the result. Read-only: it only lists file names, sizes and times.", "١) اضغط «لقطة». ٢) حقّق إنجازًا سهلًا على الجهاز (بدون إنترنت إن أمكن). ٣) اضغط «قارن» وأرسل النتيجة. للقراءة فقط: يقرأ أسماء الملفات وأحجامها وأوقاتها فقط."))
+                if (snapSavedAt > 0) Dim(tr("Saved snapshot: ", "اللقطة المحفوظة: ") + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(snapSavedAt)))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(enabled = !snapBusy, onClick = { scope.launch {
+                        snapBusy = true; snapLines = null
+                        val s = withContext(Dispatchers.IO) { runCatching { TrophySnap.take(ps4) } }
+                        snapLines = s.getOrNull()?.let { listOf(tr("Snapshot saved: ${it.items.size} entries.", "حُفظت اللقطة: ${it.items.size} عنصرًا.")) + it.notes } ?: listOf("Error: ${s.exceptionOrNull()?.message}")
+                        snapSavedAt = TrophySnap.saved(ps4)?.at ?: 0L; snapBusy = false } }) { Lbl(tr("Snapshot", "لقطة")) }
+                    Button(enabled = !snapBusy && snapSavedAt > 0, onClick = { scope.launch {
+                        snapBusy = true; snapLines = null
+                        val r = withContext(Dispatchers.IO) { runCatching {
+                            val old = TrophySnap.saved(ps4) ?: throw IllegalStateException("No saved snapshot.")
+                            val now = TrophySnap.take(ps4)
+                            TrophySnap.diff(old, now) + now.notes } }
+                        snapLines = r.getOrElse { listOf("Error: ${it.message}") }
+                        snapSavedAt = TrophySnap.saved(ps4)?.at ?: 0L; snapBusy = false } }) { Lbl(tr("Compare", "قارن")) }
+                }
+                if (snapBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                snapLines?.let { l ->
+                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(l.joinToString("\n"))) }) { Lbl(tr("Copy result", "نسخ النتيجة")) }
+                    l.take(120).forEach { Dim(it) }
+                    if (l.size > 120) Dim(tr("… ${l.size - 120} more lines (use Copy result).", "… ${l.size - 120} أسطر أخرى (استخدم نسخ النتيجة)."))
                 }
             }
         }

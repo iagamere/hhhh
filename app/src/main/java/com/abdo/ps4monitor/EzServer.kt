@@ -310,6 +310,45 @@ object EzServer {
         catch (e: Exception) { EzRemote.OpResult(false, if (e is FsUnavailable) (e.message ?: "The server is not reachable.") else EzRemote.friendly(e)) }
     }
 
+    // ---------------- deleting from the storage browser / games (DeletePolicy decides WHAT; this only opens the door briefly) ----------------
+    /** Master switch in the Storage tab. Off by default: with it off the app deletes nothing from the Storage / Games screens. */
+    fun deleteAllowed(): Boolean = Store.sp.getBoolean("del_ok", false)
+    fun setDeleteAllowed(on: Boolean) { Store.sp.edit().putBoolean("del_ok", on).apply() }
+
+    /** [previous] = the writable folders before; [changed] = this call added something that [closeWritable] must take away again. */
+    class Window(val previous: List<String>, val changed: Boolean)
+    private fun covered(roots: List<String>, p: String) = roots.any { p == it || p.startsWith("$it/") }
+    /** Makes sure every folder of [roots] is writable on the server (adds the missing ones to fs_roots, keeping the others). Window or an error text. */
+    fun openWritable(ps4: Ps4, roots: List<String>): Pair<Window?, String?> = try {
+        forget(ps4)
+        if (!isV2(ps4, 4000)) null to "The server is not running (or is not our server)."
+        else {
+            val cur = v2cache[ps4.id]?.fsRoots.orEmpty()
+            val missing = roots.filter { !covered(cur, it) }
+            if (missing.isEmpty()) Window(cur, false) to null
+            else {
+                val arr = JSONArray(); (cur + missing).distinct().forEach { arr.put(it) }
+                val r = call(ps4, "POST", "/v2/settings", JSONObject().put("fs_roots", arr).toString(), 5000)
+                forget(ps4)
+                if (r.code !in 200..299) null to "The server refused to make the folder writable (HTTP ${r.code})."
+                else {
+                    val now = rootsOf(runCatching { JSONObject(r.body).optJSONObject("settings") }.getOrNull())
+                    if (missing.any { !covered(now, it) }) null to "The server did not accept the folder as writable."
+                    else Window(cur, true) to null
+                }
+            }
+        }
+    } catch (e: Exception) { null to EzRemote.friendly(e) }
+    /** Puts fs_roots back as it was before [openWritable]. Best effort. */
+    fun closeWritable(ps4: Ps4, w: Window) {
+        if (!w.changed) return
+        try {
+            val arr = JSONArray(); w.previous.forEach { arr.put(it) }
+            call(ps4, "POST", "/v2/settings", JSONObject().put("fs_roots", arr).toString(), 5000)
+        } catch (e: Exception) { }
+        forget(ps4)
+    }
+
     // ---------------- read-only folders, space, system info (server abdo10, fs_api 2) ----------------
     val RO_DEFAULT = listOf("/user/trophy", "/system_data/priv/trophy", "/system_data/priv/cache/profile", "/user/av_contents", "/user/app", "/user/appmeta", "/system_data/priv/appmeta", "/user/home", "/system_data/priv/home", "/user/theme", "/user/themes", "/system_data/priv/theme", "/system_data/theme", "/system_ex/theme", "/user/system/theme")
     /** Extra read-only folders typed by the user (one per line in the preferences). */
