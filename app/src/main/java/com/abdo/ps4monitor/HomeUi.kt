@@ -45,13 +45,13 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
     var resumeId by remember { mutableStateOf<String?>(null) }
     fun refresh() { val p = ps4 ?: return; probing = true; scope.launch { probeMsg = DownloadMonitor.probe(p); probing = false } }
     LaunchedEffect(ps4?.id) { if (ps4 != null) refresh() }
-    var srvInfo by remember { mutableStateOf<EzServer.ServerInfo?>(null) }
+    var srvInfo by remember { mutableStateOf<Ps4Server.ServerInfo?>(null) }
     var srvChecked by remember { mutableStateOf(false) }
     var srvTick by remember { mutableIntStateOf(0) }
     var showPicker by remember { mutableStateOf(false) }
     LaunchedEffect(ps4?.id, probing, srvTick) {
         val p = ps4 ?: return@LaunchedEffect
-        if (!probing) { srvInfo = withContext(Dispatchers.IO) { EzServer.info(p, 3000) }; srvChecked = true }
+        if (!probing) { srvInfo = withContext(Dispatchers.IO) { Ps4Server.info(p, 3000) }; srvChecked = true }
     }
 
     val mine = dls.filter { it.ps4Id == ps4?.id }
@@ -74,20 +74,20 @@ private fun go(nav: NavController, r: String) = nav.navigate(r) { popUpTo(nav.gr
                             Ico(R.drawable.ic_console, 32.dp)
                             Column(Modifier.weight(1f)) {
                                 Text(ps4.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("${ps4.host}  •  :${ps4.httpPort}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(ps4.host, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             if (ps4s.size > 1) Box {
                                 TextButton(onClick = { pick = true }) { Lbl(tr("Switch", "تبديل")) }
                                 DropdownMenu(pick, { pick = false }) { ps4s.forEach { p -> DropdownMenuItem(text = { Text(p.name) }, onClick = { Ps4Repo.setActive(p.id); pick = false }) } }
                             }
                         }
-                        Text(tr("ezRemote web", "ويب ezRemote") + ": ${st.web.label}   •   " + tr("ezRemote Server", "خادم ezRemote") + ": ${st.bg.label}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                        Text(tr("PS4 server", "خادم PS4") + ": ${st.bg.label}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
                         val srvName = when {
                             !srvChecked -> tr("checking…", "جارٍ الفحص…")
                             srvInfo == null -> tr("not reachable", "غير متاح")
                             srvInfo!!.locked -> tr("custom (token required)", "مخصص (يطلب رمزًا)")
                             srvInfo!!.custom -> tr("Our server ", "سيرفرنا ") + srvInfo!!.version
-                            else -> tr("Original ezRemote", "ezRemote الأصلي")
+                            else -> tr("Older server", "PS4 server الأصلي")
                         }
                         Surface(onClick = { showPicker = true }, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f)) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

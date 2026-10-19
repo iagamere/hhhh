@@ -82,7 +82,7 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
         value = UrlIcons.peek(t.icon)
         if (t.icon != null && t.icon.startsWith("http")) { if (value == null) value = UrlIcons.load(t.icon); return@produceState }
         val e = t.icon?.let { pack?.files?.get(it) }
-        if (pack != null && e != null && e.second in 1..(2L shl 20)) value = withContext(Dispatchers.IO) { runCatching { Thumbs.decode(EzServer.fsRead(ps4, pack.trpPath, e.first, e.second.toInt(), 15000), 160) }.getOrNull() }
+        if (pack != null && e != null && e.second in 1..(2L shl 20)) value = withContext(Dispatchers.IO) { runCatching { Thumbs.decode(Ps4Server.fsRead(ps4, pack.trpPath, e.first, e.second.toInt(), 15000), 160) }.getOrNull() }
     }
     val hiddenLocked = t.hidden && !got
     Row(Modifier.fillMaxWidth().alpha(if (got || !known) 1f else 0.55f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

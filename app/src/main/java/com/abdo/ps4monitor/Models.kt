@@ -1,8 +1,8 @@
 package com.abdo.ps4monitor
 import java.util.UUID
 
-/** One PS4. Everything goes through ezRemote's web server (default 8080) and ezRemote Server (port 6701); no FTP. */
-data class Ps4(val id: String = UUID.randomUUID().toString(), val name: String, val host: String, val httpPort: Int = 8080, val dest: String = "/data/pkg", val token: String = "", val wakeKey: String = "", val autoWake: Boolean = false)
+/** One PS4. Everything goes through the PS4 server (port 6701). */
+data class Ps4(val id: String = UUID.randomUUID().toString(), val name: String, val host: String, val dest: String = "/data/pkg", val token: String = "", val wakeKey: String = "", val autoWake: Boolean = false)
 
 enum class Link(private val en: String, private val ar: String) {
     UNKNOWN("Not checked", "لم يُفحص"), AVAILABLE("Available", "متاح"), UNAVAILABLE("Unavailable", "غير متاح");
@@ -15,7 +15,7 @@ enum class DlState(private val en: String, private val ar: String, val active: B
     QUEUED("Queued", "في قائمة الانتظار", true),
     DOWNLOADING("Downloading", "جارٍ التحميل", true),
     STALLED("Stalled", "متعثّر", true),
-    SERVER_DOWN("ezRemote Server not reachable", "خادم ezRemote غير متاح", true),
+    SERVER_DOWN("PS4 server not reachable", "خادم PS4 غير متاح", true),
     VERIFYING("Verifying", "جارٍ التحقق", true),
     PAUSED("Paused", "متوقف مؤقتًا", false),
     COMPLETED("Completed", "اكتمل", false),
@@ -43,7 +43,7 @@ data class Download(
     val pkgTitle: String? = null, val titleId: String? = null, val iconReady: Boolean = false,
     val updatedAt: Long = createdAt
 ) {
-    /** Final file path on the PS4 = the "dest" ezRemote Server received; the data is written to "<path>.tmp" until it finishes. */
+    /** Final file path on the PS4 = the "dest" PS4 server received; the data is written to "<path>.tmp" until it finishes. */
     val path: String? get() = fileName?.let { joinPath(dest, it) }
     val tmpPath: String? get() = path?.plus(".tmp")
     val pct: Int? get() = expectedSize?.takeIf { it > 0 }?.let { (currentSize * 100 / it).toInt().coerceIn(0, 100) }

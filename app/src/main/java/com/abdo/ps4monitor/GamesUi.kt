@@ -148,7 +148,7 @@ import kotlinx.coroutines.withContext
     val scope = rememberCoroutineScope()
     var step by remember(g.titleId) { mutableIntStateOf(0) }          // 0 none, 1 first dialog, 2 final warning, 3 deleting
     var result by remember(g.titleId) { mutableStateOf<DeleteResult?>(null) }
-    val allowed = EzServer.deleteAllowed()
+    val allowed = Ps4Server.deleteAllowed()
     HorizontalDivider()
     Text(tr("Delete game", "حذف اللعبة"), fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error)
     Dim(tr("Removes the game, its update and its add-on content from the console. Saved games and trophies stay.", "يزيل اللعبة وتحديثها ومحتواها الإضافي من الجهاز. الحفظ (Save) والإنجازات تبقى."))

@@ -15,7 +15,7 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /**
- * Everything the "PS4" screen shows. All of it is read through ezRemote Server (the /v2/fs routes and /v2/sysinfo), so it also works while a game is running.
+ * Everything the "PS4" screen shows. All of it is read through PS4 server (the /v2/fs routes and /v2/sysinfo), so it also works while a game is running.
  * NOTHING here is verified on a real console: the folder names below are the usual PS4 ones from public documentation, and the screen shows
  * a "Check paths" report so you can see exactly which of them the console answered.
  */
@@ -37,9 +37,9 @@ object Ps4Info {
     private fun child(dir: String, n: String) = if (dir.endsWith("/")) dir + n else "$dir/$n"
 
     /** Lists a folder through the server, mapping every failure to a short English sentence (Tx translates the common ones). */
-    private fun listOrNote(ps4: Ps4, path: String, notes: MutableList<String>): List<FsEntry>? = try { EzServer.fsList(ps4, path, 8000) }
-        catch (e: EzServer.FsUnavailable) { notes.add("$path: not allowed or not reachable (${e.message})"); null }
-        catch (e: EzError) { notes.add("$path: ${e.message}"); null }
+    private fun listOrNote(ps4: Ps4, path: String, notes: MutableList<String>): List<FsEntry>? = try { Ps4Server.fsList(ps4, path, 8000) }
+        catch (e: Ps4Server.FsUnavailable) { notes.add("$path: not allowed or not reachable (${e.message})"); null }
+        catch (e: Ps4Error) { notes.add("$path: ${e.message}"); null }
         catch (e: Exception) { notes.add("$path: ${e.message}"); null }
 
     /** Photos and videos under /user/av_contents (and the user's extra folders), newest first. At most [limit] files and [maxDirs] folders are visited. */
@@ -108,7 +108,7 @@ object Ps4Info {
             var sfo: Map<String, String> = emptyMap(); var sfoPath: String? = null; var meta: String? = null
             for (m in META_DIRS) {
                 val p = "$m/$id/param.sfo"
-                val bytes = try { EzServer.fsRead(ps4, p, 0, 64 * 1024, 6000) } catch (e: Exception) { ByteArray(0) }
+                val bytes = try { Ps4Server.fsRead(ps4, p, 0, 64 * 1024, 6000) } catch (e: Exception) { ByteArray(0) }
                 if (bytes.isNotEmpty()) { val s = runCatching { parseSfo(bytes) }.getOrDefault(emptyMap()); if (s.isNotEmpty()) { sfo = s; sfoPath = p; meta = m; break } }
             }
             res.add(GameInfo(id, sfo["TITLE"] ?: id, sfo["APP_VER"] ?: sfo["VERSION"] ?: "", sfo["CATEGORY"] ?: "", meta, sfoPath, sfo))
@@ -146,10 +146,10 @@ object Ps4Info {
         cands.add(tr("Extended storage", "التخزين الموسّع") to "/mnt/ext0")
         for ((label, path) in cands) {
             try {
-                val (t, f) = EzServer.fsSpace(ps4, path, 5000)
+                val (t, f) = Ps4Server.fsSpace(ps4, path, 5000)
                 if (t > 0 && seen.add(t to f)) out.add(Volume(label, path, t, f))
-            } catch (e: EzServer.FsUnavailable) { if (!path.startsWith("/mnt/usb") && !path.startsWith("/mnt/ext")) notes.add("$path: not allowed or not reachable (${e.message})") }
-            catch (e: EzError) { if (!path.startsWith("/mnt/usb") && !path.startsWith("/mnt/ext")) notes.add("$path: ${e.message}") }
+            } catch (e: Ps4Server.FsUnavailable) { if (!path.startsWith("/mnt/usb") && !path.startsWith("/mnt/ext")) notes.add("$path: not allowed or not reachable (${e.message})") }
+            catch (e: Ps4Error) { if (!path.startsWith("/mnt/usb") && !path.startsWith("/mnt/ext")) notes.add("$path: ${e.message}") }
             catch (e: Exception) { notes.add("$path: ${e.message}") }
         }
         return out to notes
@@ -157,11 +157,11 @@ object Ps4Info {
 
     // ---------------- diagnostics ----------------
     fun checkPaths(ps4: Ps4): List<PathCheck> {
-        val paths = (EzServer.RO_DEFAULT + EzServer.roExtra() + EzServer.fsRootsKnown(ps4) + listOf(CAPTURE_ROOT + "/photo", CAPTURE_ROOT + "/video")).distinct()
+        val paths = (Ps4Server.RO_DEFAULT + Ps4Server.roExtra() + Ps4Server.fsRootsKnown(ps4) + listOf(CAPTURE_ROOT + "/photo", CAPTURE_ROOT + "/video")).distinct()
         return paths.map { p ->
-            try { val l = EzServer.fsList(ps4, p, 6000); PathCheck(p, true, "${l.count { it.isDir }} folders, ${l.count { !it.isDir }} files") }
-            catch (e: EzServer.FsUnavailable) { PathCheck(p, false, "not allowed or not reachable (${e.message})") }
-            catch (e: EzError) { PathCheck(p, false, e.message ?: "error") }
+            try { val l = Ps4Server.fsList(ps4, p, 6000); PathCheck(p, true, "${l.count { it.isDir }} folders, ${l.count { !it.isDir }} files") }
+            catch (e: Ps4Server.FsUnavailable) { PathCheck(p, false, "not allowed or not reachable (${e.message})") }
+            catch (e: Ps4Error) { PathCheck(p, false, e.message ?: "error") }
             catch (e: Exception) { PathCheck(p, false, e.message ?: "error") }
         }
     }
@@ -246,11 +246,11 @@ object Thumbs {
         if (maxSide <= 512) diskGet(dk)?.let { cache.put(k, it); return@withContext it }
         gate.withPermit {
             cache.get(k) ?: try {
-                val sz = if (size > 0) size else EzServer.fsSize(ps4, path, 6000)
+                val sz = if (size > 0) size else Ps4Server.fsSize(ps4, path, 6000)
                 if (sz <= 0) { lastError = tr("File not found", "الملف غير موجود"); null }
                 else if (sz > MAX_READ) { lastError = tr("File too large", "الملف كبير جدًا"); null }
                 else {
-                    val bmp = decode(EzServer.fsRead(ps4, path, 0, sz.toInt(), 30_000), maxSide)
+                    val bmp = decode(Ps4Server.fsRead(ps4, path, 0, sz.toInt(), 30_000), maxSide)
                     if (bmp == null) { lastError = tr("Not a readable image", "ليست صورة قابلة للقراءة"); null }
                     else { cache.put(k, bmp); if (maxSide <= 512) diskPut(dk, bmp); bmp }
                 }
@@ -272,7 +272,7 @@ object Thumbs {
         diskGet(dk)?.let { cache.put(k, it); return@withContext it }
         videoGate.withPermit {
             cache.get(k) ?: try {
-                val sz = if (size > 0) size else EzServer.fsSize(ps4, path, 6000)
+                val sz = if (size > 0) size else Ps4Server.fsSize(ps4, path, 6000)
                 if (sz <= 0) null else {
                     val r = MediaMetadataRetriever()
                     try {
@@ -302,7 +302,7 @@ object Thumbs {
                 val blk: ByteArray = blocks[idx] ?: run {
                     if (fetched > BUDGET) throw IOException("thumbnail budget used")
                     val start = idx * BLOCK; val len = minOf(BLOCK.toLong(), total - start).toInt()
-                    val d = EzServer.fsRead(ps4, path, start, len, 20_000)
+                    val d = Ps4Server.fsRead(ps4, path, start, len, 20_000)
                     if (d.isEmpty()) throw IOException("empty read")
                     fetched += d.size; blocks[idx] = d; d
                 }

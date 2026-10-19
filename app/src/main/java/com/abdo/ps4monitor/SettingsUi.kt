@@ -40,7 +40,7 @@ import kotlinx.coroutines.withContext
     LazyColumn(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
         item { Text(tr("Settings", "الإعدادات"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold) }
         item { NavRow(R.drawable.ic_console, tr("PS4 consoles", "أجهزة PS4"), tr("Add, edit and choose the active PS4", "إضافة وتعديل واختيار الجهاز النشط")) { nav.navigate("settings/ps4s") } }
-        item { NavRow(R.drawable.ic_download, tr("ezRemote Server", "خادم ezRemote"), tr("Status, send the server to the PS4, download settings, log", "الحالة، إرسال السيرفر إلى الـPS4، إعدادات التحميل، السجل")) { nav.navigate("settings/server") } }
+        item { NavRow(R.drawable.ic_download, tr("PS4 server", "خادم PS4"), tr("Status, send the server to the PS4, download settings, log", "الحالة، إرسال السيرفر إلى الـPS4، إعدادات التحميل، السجل")) { nav.navigate("settings/server") } }
         item { Panel {
             SectionTitle(tr("Language", "اللغة"))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(0 to tr("Phone", "الهاتف"), 1 to "English", 2 to "العربية").forEach { (i, t) -> FilterChip(Lang.mode == i, { Store.setLang(i) }, label = { Lbl(t) }) } }
@@ -63,7 +63,7 @@ import kotlinx.coroutines.withContext
             Text(tr("Battery optimization may pause background monitoring on some phones.", "قد يوقف توفير البطارية المراقبة في الخلفية على بعض الهواتف."))
             Button(onClick = { ctx.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }) { Lbl(tr("Battery settings", "إعدادات البطارية")) }
         } }
-        item { NavRow(R.drawable.ic_search, tr("Advanced", "متقدم"), tr("Debug log, stop ezRemote Server", "سجل التصحيح، إيقاف خادم ezRemote")) { nav.navigate("settings/advanced") } }
+        item { NavRow(R.drawable.ic_search, tr("Advanced", "متقدم"), tr("Debug log, stop PS4 server", "سجل التصحيح، إيقاف خادم PS4")) { nav.navigate("settings/advanced") } }
         item { Dim("PS4 Download Monitor 4.2") }
     }
 }
@@ -75,17 +75,17 @@ import kotlinx.coroutines.withContext
         BackHeader(tr("Advanced", "متقدم"), nav)
         NavRow(R.drawable.ic_search, tr("Debug log", "سجل التصحيح"), "") { nav.navigate("settings/log") }
         Panel {
-            OutlinedButton(onClick = { confirmStop = true }, enabled = Ps4Repo.active() != null) { Ico(R.drawable.ic_stop, 18.dp, MaterialTheme.colorScheme.error); Spacer(Modifier.width(6.dp)); Lbl(tr("Stop ezRemote Server", "إيقاف خادم ezRemote"), color = MaterialTheme.colorScheme.error) }
-            Dim(tr("Stops ALL its background downloads and installs; they resume from where they stopped once ezRemote is launched again on the PS4.", "يوقف كل تحميلاته وتثبيتاته في الخلفية؛ وتُستأنف من حيث توقفت عند تشغيل ezRemote مجددًا على الـPS4."))
+            OutlinedButton(onClick = { confirmStop = true }, enabled = Ps4Repo.active() != null) { Ico(R.drawable.ic_stop, 18.dp, MaterialTheme.colorScheme.error); Spacer(Modifier.width(6.dp)); Lbl(tr("Stop PS4 server", "إيقاف خادم PS4"), color = MaterialTheme.colorScheme.error) }
+            Dim(tr("Stops ALL its background downloads and installs; they resume from where they stopped once PS4 server is launched again on the PS4.", "يوقف كل تحميلاته وتثبيتاته في الخلفية؛ وتُستأنف من حيث توقفت عند تشغيل PS4 server مجددًا على الـPS4."))
         }
     }
-    if (confirmStop) AlertDialog(onDismissRequest = { confirmStop = false }, title = { Text(tr("Stop ezRemote Server?", "إيقاف خادم ezRemote؟")) },
-        text = { Text(tr("All background downloads and installs on ${Ps4Repo.active()?.name ?: "the PS4"} will stop. Launch ezRemote on the PS4 to start it again.", "ستتوقف كل التحميلات والتثبيتات في الخلفية على ${Ps4Repo.active()?.name ?: "الـPS4"}. شغّل ezRemote على الـPS4 لتشغيله مجددًا.")) },
+    if (confirmStop) AlertDialog(onDismissRequest = { confirmStop = false }, title = { Text(tr("Stop PS4 server?", "إيقاف خادم PS4؟")) },
+        text = { Text(tr("All background downloads and installs on ${Ps4Repo.active()?.name ?: "the PS4"} will stop. Launch PS4 server on the PS4 to start it again.", "ستتوقف كل التحميلات والتثبيتات في الخلفية على ${Ps4Repo.active()?.name ?: "الـPS4"}. شغّل PS4 server على الـPS4 لتشغيله مجددًا.")) },
         confirmButton = { TextButton(onClick = {
             val p = Ps4Repo.active(); confirmStop = false
             if (p != null) scope.launch {
-                val stopped = withContext(Dispatchers.IO) { EzServer.stop(p) }
-                Toast.makeText(ctx, if (stopped) tr("ezRemote Server stopped.", "توقف خادم ezRemote.") else tr("It still answers; it was not stopped.", "ما زال يستجيب؛ لم يتوقف."), Toast.LENGTH_LONG).show()
+                val stopped = withContext(Dispatchers.IO) { Ps4Server.stop(p) }
+                Toast.makeText(ctx, if (stopped) tr("PS4 server stopped.", "توقف خادم PS4.") else tr("It still answers; it was not stopped.", "ما زال يستجيب؛ لم يتوقف."), Toast.LENGTH_LONG).show()
             }
         }) { Lbl(tr("Stop", "إيقاف"), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = { confirmStop = false }) { Lbl(tr("Cancel", "إلغاء")) } })
@@ -123,7 +123,6 @@ import kotlinx.coroutines.withContext
     val isNew = existing == null
     var name by remember { mutableStateOf(existing?.name ?: "PS4") }
     var host by remember { mutableStateOf(existing?.host.orEmpty()) }
-    var http by remember { mutableStateOf((existing?.httpPort ?: 8080).toString()) }
     var dest by remember { mutableStateOf(existing?.dest ?: "/data/pkg") }
     var token by remember { mutableStateOf(existing?.token.orEmpty()) }
     var wakeKey by remember { mutableStateOf(existing?.wakeKey.orEmpty()) }
@@ -148,7 +147,7 @@ import kotlinx.coroutines.withContext
         }
     }
     LaunchedEffect(Unit) { if (isNew && host.isBlank()) scan() }
-    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), httpPort = http.toIntOrNull() ?: 8080, dest = DownloadMonitor.norm(dest), token = token.trim(), wakeKey = wakeKey.trim(), autoWake = autoWake && wakeKey.isNotBlank())
+    fun build() = Ps4(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name.trim().ifBlank { "PS4" }, host = host.trim(), dest = DownloadMonitor.norm(dest), token = token.trim(), wakeKey = wakeKey.trim(), autoWake = autoWake && wakeKey.isNotBlank())
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         BackHeader(if (isNew) tr("Add PS4", "إضافة PS4") else tr("Edit PS4", "تعديل PS4"), nav)
         val full = Modifier.fillMaxWidth()
@@ -160,16 +159,14 @@ import kotlinx.coroutines.withContext
                 Card(onClick = { host = f.host }, modifier = full, colors = CardDefaults.cardColors(containerColor = if (f.host == host) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)) {
                     Column(Modifier.padding(12.dp)) {
                         Text(f.host + if (f.likely) "   ✓" else "", fontWeight = FontWeight.SemiBold)
-                        Dim((if (f.server) tr("ezRemote Server (", "خادم ezRemote (") + f.serverKind + "), " else "") + (if (f.loader) tr("GoldHEN loader, ", "محمّل GoldHEN، ") else "") + tr("open ports: ", "المنافذ المفتوحة: ") + f.ports)
+                        Dim((if (f.server) tr("PS4 server (", "خادم PS4 (") + f.serverKind + "), " else "") + (if (f.loader) tr("GoldHEN loader, ", "محمّل GoldHEN، ") else "") + tr("open ports: ", "المنافذ المفتوحة: ") + f.ports)
                     }
                 }
             }
             if (scanDone && scanNoNet) Dim(tr("The phone has no local network address. Connect to the same Wi-Fi as the PS4.", "ليس للهاتف عنوان شبكة محلية. اتصل بنفس شبكة الواي فاي الخاصة بالـPS4."))
-            else if (scanDone && found.isEmpty()) Dim(tr("No PS4 found. Make sure it is on (not in rest mode), on the same Wi-Fi, and that ezRemote or GoldHEN's payload loader is running. Or type the IP below.", "لم يُعثر على PS4. تأكد أنه يعمل (ليس في وضع الراحة) وعلى نفس الشبكة، وأن ezRemote أو محمّل GoldHEN يعمل. أو اكتب الـIP بالأسفل."))
-            else if (scanDone && found.none { it.likely }) Dim(tr("Only port 8080 answered: this may not be a PS4. Pick it only if you recognise the address.", "استجاب المنفذ 8080 فقط: قد لا يكون PS4. اخترْه فقط إن عرفت العنوان."))
+            else if (scanDone && found.isEmpty()) Dim(tr("No PS4 found. Make sure it is on (not in rest mode), on the same Wi-Fi, and that PS4 server or GoldHEN's payload loader is running. Or type the IP below.", "لم يُعثر على PS4. تأكد أنه يعمل (ليس في وضع الراحة) وعلى نفس الشبكة، وأن PS4 server أو محمّل GoldHEN يعمل. أو اكتب الـIP بالأسفل."))
         }
         OutlinedTextField(host, { host = it }, label = { Text(tr("PS4 IP address / host", "عنوان IP للـPS4")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-        OutlinedTextField(http, { http = it }, label = { Text(tr("ezRemote web port (default 8080)", "منفذ ويب ezRemote (الافتراضي 8080)")) }, singleLine = true, modifier = full, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         OutlinedTextField(dest, { dest = it }, label = { Text(tr("Default download folder", "مجلد التحميل الافتراضي")) }, singleLine = true, modifier = full)
         OutlinedTextField(token, { token = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("Server token (only if you set one on the server)", "رمز الخادم (فقط إن وضعت رمزًا على الخادم)")) }, singleLine = true, modifier = full)
         Panel {
@@ -186,7 +183,7 @@ import kotlinx.coroutines.withContext
         if (result.isNotEmpty()) Text(Tx.lines(result), fontWeight = FontWeight.SemiBold)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(enabled = !busy && host.isNotBlank(), onClick = { busy = true; result = ""; scope.launch { result = DownloadMonitor.probe(build()); busy = false } }) { Lbl(tr("Test connection", "اختبار الاتصال")) }
-            Button(enabled = host.isNotBlank(), onClick = { val np = build(); Ps4Repo.save(np); EzServer.forget(np); nav.popBackStack() }) { Lbl(tr("Save", "حفظ")) }
+            Button(enabled = host.isNotBlank(), onClick = { val np = build(); Ps4Repo.save(np); Ps4Server.forget(np); nav.popBackStack() }) { Lbl(tr("Save", "حفظ")) }
         }
         if (!isNew) {
             val inUse = DownloadRepo.all.value.any { it.ps4Id == existing!!.id && it.state.active }

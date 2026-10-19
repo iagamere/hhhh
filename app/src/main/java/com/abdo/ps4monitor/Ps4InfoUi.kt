@@ -44,7 +44,7 @@ import org.json.JSONObject
     LaunchedEffect(ps4?.id, reload) {
         val p = ps4 ?: return@LaunchedEffect
         checking = true
-        reason = withContext(Dispatchers.IO) { EzServer.prepareInfo(p) }
+        reason = withContext(Dispatchers.IO) { Ps4Server.prepareInfo(p) }
         checking = false
     }
     Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -78,7 +78,7 @@ import org.json.JSONObject
 @Composable private fun StorageTab(ps4: Ps4, reload: Int) {
     var res by remember(ps4.id, reload) { mutableStateOf<Pair<List<Volume>, List<String>>?>(null) }
     var browsing by rememberSaveable { mutableStateOf(false) }
-    var delOn by remember { mutableStateOf(EzServer.deleteAllowed()) }
+    var delOn by remember { mutableStateOf(Ps4Server.deleteAllowed()) }
     LaunchedEffect(ps4.id, reload) { res = null; res = withContext(Dispatchers.IO) { Ps4Info.storage(ps4) } }
     if (browsing) { StorageBrowser(ps4, delOn) { browsing = false }; return }
     val r = res
@@ -103,7 +103,7 @@ import org.json.JSONObject
                 Button(onClick = { browsing = true }) { Ico(R.drawable.ic_folder, 18.dp); Spacer(Modifier.width(6.dp)); Lbl(tr("Browse files", "تصفّح الملفات")) }
             }
         }
-        item { DeleteSettingsPanel(delOn) { delOn = it; EzServer.setDeleteAllowed(it) } }
+        item { DeleteSettingsPanel(delOn) { delOn = it; Ps4Server.setDeleteAllowed(it) } }
         if (r != null) item { NoteList(r.second) }
     }
 }
@@ -114,7 +114,7 @@ import org.json.JSONObject
     var sys by remember(ps4.id, reload) { mutableStateOf<Pair<List<Pair<String, String>>, List<String>>?>(null) }
     var checks by remember(ps4.id, reload) { mutableStateOf<List<PathCheck>?>(null) }
     var checking by remember { mutableStateOf(false) }
-    var extra by remember(ps4.id) { mutableStateOf(EzServer.roExtra().joinToString("\n")) }
+    var extra by remember(ps4.id) { mutableStateOf(Ps4Server.roExtra().joinToString("\n")) }
     var msg by remember { mutableStateOf("") }
     var trop by remember { mutableStateOf<List<String>?>(null) }
     var tropBusy by remember { mutableStateOf(false) }
@@ -123,14 +123,14 @@ import org.json.JSONObject
     var snapSavedAt by remember { mutableStateOf(TrophySnap.saved(ps4)?.at ?: 0L) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    var info by remember(ps4.id, reload) { mutableStateOf<EzServer.ServerInfo?>(null) }
-    LaunchedEffect(ps4.id, reload) { sys = null; val (i, s) = withContext(Dispatchers.IO) { EzServer.info(ps4) to Ps4Info.deviceRows(EzServer.sysinfo(ps4)) }; info = i; sys = s }
+    var info by remember(ps4.id, reload) { mutableStateOf<Ps4Server.ServerInfo?>(null) }
+    LaunchedEffect(ps4.id, reload) { sys = null; val (i, s) = withContext(Dispatchers.IO) { Ps4Server.info(ps4) to Ps4Info.deviceRows(Ps4Server.sysinfo(ps4)) }; info = i; sys = s }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Panel {
                 Text(ps4.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                Dim("${ps4.host}  •  web :${ps4.httpPort}")
-                info?.let { Dim(tr("ezRemote Server", "خادم ezRemote") + ": " + it.version) }
+                Dim(ps4.host)
+                info?.let { Dim(tr("PS4 server", "خادم PS4") + ": " + it.version) }
                 val st = sys
                 if (st == null) LinearProgressIndicator(Modifier.fillMaxWidth())
                 else {
@@ -146,7 +146,7 @@ import org.json.JSONObject
                 Dim(tr("Read-only: the server never changes these. Add more folders below (one per line), e.g. where your captures really are.", "للقراءة فقط: لا يغيّرها الخادم أبدًا. أضف مجلدات أخرى أدناه (واحد في كل سطر)، مثل المكان الفعلي للقطاتك."))
                 OutlinedTextField(extra, { extra = it }, label = { Text(tr("Extra folders", "مجلدات إضافية")) }, minLines = 2, modifier = Modifier.fillMaxWidth())
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { scope.launch { val e = withContext(Dispatchers.IO) { EzServer.setRoExtra(ps4, extra) }; msg = if (e == null) tr("Saved and sent to the server.", "حُفظ وأُرسل إلى الخادم.") else Tx.t(e) } }) { Lbl(tr("Save", "حفظ")) }
+                    Button(onClick = { scope.launch { val e = withContext(Dispatchers.IO) { Ps4Server.setRoExtra(ps4, extra) }; msg = if (e == null) tr("Saved and sent to the server.", "حُفظ وأُرسل إلى الخادم.") else Tx.t(e) } }) { Lbl(tr("Save", "حفظ")) }
                     FilledTonalButton(enabled = !checking, onClick = { scope.launch { checking = true; checks = null; checks = withContext(Dispatchers.IO) { Ps4Info.checkPaths(ps4) }; checking = false } }) { Lbl(tr("Check paths", "فحص المسارات")) }
                 }
                 if (msg.isNotBlank()) Dim(msg)

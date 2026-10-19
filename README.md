@@ -1,3 +1,13 @@
+# PS4 Download Monitor 5.8
+
+## 5.8 no ezRemote at all
+- **How to use (first time):** 1) turn the PS4 on and start GoldHEN, 2) in GoldHEN settings turn on "Enable PayLoader Server" (port 9090), 3) open the app > Add PS4 (it finds the console by itself) > Home > tap "Server in use" > "Our server". Nothing else has to be installed on the PS4.
+- Removed: every call to ezRemote Client's web server (port 8080), the "PS4 web port" field, the web status on Home, the 8080 scan in "Find my PS4", and every mention of ezRemote in the texts. All file, download, install, copy, move, delete and information functions go through our server (port 6701).
+- Renamed in the code: `EzRemote` -> `Ps4Api` (server only), `EzServer` -> `Ps4Server`, `EzError` -> `Ps4Error`.
+- Not available any more (the server has no such call): extracting archives and editing text files on the PS4.
+- After a successful send the app turns file access on and creates `/data/ezremote-client` on the PS4 (best effort): the bundled server.elf still uses that folder name and `/data/ezremote_boot.log` for its history and log; they are paths inside the binary and cannot be renamed without the server's source.
+- NOT compiled here (no Android SDK) and NOT tried on a console. Static checks only: brace balance and that every called function exists.
+
 # PS4 Download Monitor 5.7.5
 
 ## 5.7.5 storage browser, safe delete, delete a game

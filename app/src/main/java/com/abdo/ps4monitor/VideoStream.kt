@@ -39,7 +39,7 @@ class PsStreamSource(private val ps4: Ps4, private val path: String, private val
 
     private fun fetch(idx: Long): ByteArray {
         val start = idx * BLOCK
-        return EzServer.fsRead(ps4, path, start, minOf(BLOCK.toLong(), total - start).toInt(), 20_000)
+        return Ps4Server.fsRead(ps4, path, start, minOf(BLOCK.toLong(), total - start).toInt(), 20_000)
     }
 
     private fun prefetch(idx: Long) {
@@ -105,7 +105,7 @@ private fun mmss(ms: Int): String { val s = (ms / 1000).coerceAtLeast(0); return
     // 1) the size of the file (MediaPlayer needs it up front)
     LaunchedEffect(c.path) {
         try {
-            val size = if (c.size > 0) c.size else withContext(Dispatchers.IO) { EzServer.fsSize(ps4, c.path, 6000) }
+            val size = if (c.size > 0) c.size else withContext(Dispatchers.IO) { Ps4Server.fsSize(ps4, c.path, 6000) }
             if (size <= 0) err = tr("The file is empty or could not be read.", "الملف فارغ أو تعذّرت قراءته.") else src = PsStreamSource(ps4, c.path, size)
         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: Exception) { err = tr("Cannot reach the PS4: ", "تعذّر الوصول إلى الـPS4: ") + (e.message ?: e.javaClass.simpleName) }

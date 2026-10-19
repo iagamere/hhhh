@@ -9,7 +9,7 @@ import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * One download known to ezRemote Server. `path` is the FINAL file path; the data is written to "<path>.tmp".
+ * One download known to PS4 server. `path` is the FINAL file path; the data is written to "<path>.tmp".
  * Fields after `ts` exist only with the custom server (/v2 API): [id] is its handle for pause/resume/delete.
  */
 class SrvEntry(val path: String, val bytes: Long, val size: Long, val state: Int, val ts: Long,
@@ -24,14 +24,14 @@ class SrvEntry(val path: String, val bytes: Long, val size: Long, val state: Int
 }
 
 /**
- * ezRemote Server (ps4-ezremote-server): the component that really downloads. Listens on 0.0.0.0:6701. Two flavours:
+ * PS4 server (ps4-ezremote-server): the component that really downloads. Listens on 0.0.0.0:6701. Two flavours:
  *  - the ORIGINAL: GET /get_download_state -> [{path, bytes_transfered, file_size, state, timestamp}] (state 0..4), GET /stop kills the whole
  *    process. One download at a time, no per-download cancel/pause/remove (those need stop + edit of bg_download_history.json).
  *  - the CUSTOM build (ps4-ezremote-server-abdo): the same legacy routes plus /v2: GET /v2/info, GET /v2/downloads, POST /v2/pause,
  *    /v2/resume, /v2/delete {id,...}. Detected with GET /v2/info (an original server answers 404), so both keep working.
- * `file_size` of the original is what ezRemote Client measured (garbage when that failed), so it is range-checked.
+ * `file_size` of the original is what PS4 server measured (garbage when that failed), so it is range-checked.
  */
-object EzServer {
+object Ps4Server {
     const val PORT = 6701
     class Reply(val code: Int, val body: String)
     private class V2Info(val ok: Boolean, val at: Long, val maxAttempts: Int, val fsRoots: List<String> = emptyList(), val fsApi: Int = 0, val roRoots: List<String> = emptyList())
@@ -58,7 +58,7 @@ object EzServer {
     }
     private fun get(ps4: Ps4, path: String, timeoutMs: Int): String {
         val r = call(ps4, "GET", path, null, timeoutMs)
-        if (r.code !in 200..299) throw EzError("ezRemote Server answered HTTP ${r.code}.")
+        if (r.code !in 200..299) throw Ps4Error("PS4 server answered HTTP ${r.code}.")
         return r.body
     }
 
@@ -68,7 +68,7 @@ object EzServer {
         if (c != null && now - c.at < (if (c.ok) 120_000L else 30_000L)) return c.ok
         val r = call(ps4, "GET", "/v2/info", null, timeoutMs)
         if (r.code == 401) {
-            if (locked.put(ps4.id, true) != true) DownloadMonitor.d("ezRemote Server asks for a token (X-Token): enter it in this PS4's settings in the app.")
+            if (locked.put(ps4.id, true) != true) DownloadMonitor.d("PS4 server asks for a token (X-Token): enter it in this PS4's settings in the app.")
             v2cache[ps4.id] = V2Info(false, now, 5)
             return false
         }
@@ -101,7 +101,7 @@ object EzServer {
             if (r.code == 401) { locked[ps4.id] = true; v2cache.remove(ps4.id) }   // token changed under us: re-detect
             else if (r.code == 404) v2cache.remove(ps4.id)                       // replaced by an original server: use the old API below
             else if (r.code in 200..299) return parseV2(r.body)
-            else throw EzError("ezRemote Server answered HTTP ${r.code}.")
+            else throw Ps4Error("PS4 server answered HTTP ${r.code}.")
         }
         return parseLegacy(get(ps4, "/get_download_state", timeoutMs))
     }
@@ -119,7 +119,7 @@ object EzServer {
     }
     fun up(ps4: Ps4): Boolean = try { list(ps4, 3000); true } catch (e: Exception) { false }
 
-    /** Terminates ezRemote Server (original: the only way to cancel anything). True when it no longer answers afterwards. */
+    /** Terminates PS4 server (original: the only way to cancel anything). True when it no longer answers afterwards. */
     fun stop(ps4: Ps4): Boolean {
         try { get(ps4, "/stop", 3000) } catch (e: Exception) { }
         Thread.sleep(2000)
@@ -153,10 +153,10 @@ object EzServer {
     /** The server's log FILE on the PS4 (readable even when the server is not running), last 12 KB. */
     fun logFile(ps4: Ps4): String {
         val path = "/data/ezremote-client/dlserver.log"
-        val size = EzRemote.fileSize(ps4, path, 6000)
-        if (size <= 0) throw EzError("dlserver.log was not found on the PS4.")
+        val size = Ps4Api.fileSize(ps4, path, 6000)
+        if (size <= 0) throw Ps4Error("dlserver.log was not found on the PS4.")
         val len = minOf(size, 12_288L).toInt()
-        return String(EzRemote.readRange(ps4, path, size - len, len, 8000), Charsets.UTF_8)
+        return String(Ps4Api.readRange(ps4, path, size - len, len, 8000), Charsets.UTF_8)
     }
 
     // ---------------- /v2 control (custom server only) ----------------
@@ -171,18 +171,18 @@ object EzServer {
             j == null && r.code == 404 -> Ctl(false, "", legacy = true)
             else -> Ctl(false, j?.optString("error").orEmpty().ifBlank { "HTTP ${r.code}" })
         }
-    } catch (e: Exception) { Ctl(false, EzRemote.friendly(e)) }
+    } catch (e: Exception) { Ctl(false, Ps4Api.friendly(e)) }
     /**
-     * Queues a download directly on the custom server (POST /v2/add), WITHOUT ezRemote Client's web server (port 8080). The PS4 suspends ezRemote
-     * Client while a game runs, and its web server with it; the server is a payload and keeps answering. Same fields ezRemote Client would send:
+     * Queues a download directly on the custom server (POST /v2/add), WITHOUT PS4 server's web server (port 8080). The PS4 suspends PS4 server
+     * Client while a game runs, and its web server with it; the server is a payload and keeps answering. Same fields PS4 server would send:
      * type 7 (file host), host = scheme://host[:port], src_path = path + query, dest_path = the final file path.
      * Sending the same dest_path again replaces the link and continues (that is how an expired link is refreshed).
      * Unreachable (not Rejected) is returned for anything that is not a plain http(s) link or when the server does not answer, so the caller can
      * still try the old route.
      */
-    fun add(ps4: Ps4, url: String, destPath: String): EzRemote.Submit {
+    fun add(ps4: Ps4, url: String, destPath: String): Ps4Api.Submit {
         val m = Regex("^(https?://[^/?#@]+)([^#]*)$", RegexOption.IGNORE_CASE).matchEntire(url.trim())
-            ?: return EzRemote.Submit.Unreachable("This link cannot be sent directly to the server.")
+            ?: return Ps4Api.Submit.Unreachable("This link cannot be sent directly to the server.")
         var path = m.groupValues[2]
         if (path.isEmpty()) path = "/" else if (path.startsWith("?")) path = "/$path"
         path = path.replace(" ", "%20")
@@ -191,11 +191,11 @@ object EzServer {
             val r = call(ps4, "POST", "/v2/add", body, 10_000)
             val j = runCatching { JSONObject(r.body) }.getOrNull()
             when {
-                r.code in 200..299 && j?.optBoolean("ok", true) != false -> EzRemote.Submit.Accepted
-                j != null && j.has("error") -> EzRemote.Submit.Rejected("ezRemote Server rejected the request: " + j.optString("error"))
-                else -> EzRemote.Submit.Rejected("ezRemote Server answered HTTP ${r.code}.")
+                r.code in 200..299 && j?.optBoolean("ok", true) != false -> Ps4Api.Submit.Accepted
+                j != null && j.has("error") -> Ps4Api.Submit.Rejected("PS4 server rejected the request: " + j.optString("error"))
+                else -> Ps4Api.Submit.Rejected("PS4 server answered HTTP ${r.code}.")
             }
-        } catch (e: Exception) { EzRemote.Submit.Unreachable(EzRemote.friendly(e)) }
+        } catch (e: Exception) { Ps4Api.Submit.Unreachable(Ps4Api.friendly(e)) }
     }
     // ---------------- queue order (custom server) ----------------
     fun setPriority(ps4: Ps4, id: Int, priority: Int): Ctl = control(ps4, "/v2/priority", "{\"id\":$id,\"priority\":$priority}")
@@ -205,7 +205,7 @@ object EzServer {
     fun startNow(ps4: Ps4, id: Int): Ctl = control(ps4, "/v2/start_now", "{\"id\":$id}")
 
     // ---------------- file access through the server (/v2/fs/*) ----------------
-    // The PS4 suspends ezRemote Client and its web server (port 8080) while a game runs; this server keeps answering. EzRemote's file functions
+    // The PS4 suspends PS4 server and its web server (port 8080) while a game runs; this server keeps answering. Ps4Api's file functions
     // try the server first for paths inside the folders the server allows, and fall back to the web server when the server cannot do it.
     class FsUnavailable(msg: String) : IOException(msg)
     private val fsFailAt = ConcurrentHashMap<String, Long>()
@@ -235,21 +235,21 @@ object EzServer {
         return roots.any { path == it || path.startsWith("$it/") }
     }
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
-    /** Definitive failures (missing file, name taken...) become EzError; everything that means "ask the web server instead" becomes FsUnavailable. */
+    /** Definitive failures (missing file, name taken...) become Ps4Error; everything that means "ask the web server instead" becomes FsUnavailable. */
     private fun fsJson(ps4: Ps4, r: Reply): JSONObject {
         if (r.code == 401 || r.code == 403) { if (r.code == 403) v2cache.remove(ps4.id); throw FsUnavailable("HTTP ${r.code}") }
         val j = runCatching { JSONObject(r.body) }.getOrNull() ?: throw FsUnavailable("Unexpected reply (HTTP ${r.code})")
-        if (r.code !in 200..299 || !j.optBoolean("ok", true)) throw EzError(j.optString("error").ifBlank { "ezRemote Server answered HTTP ${r.code}." })
+        if (r.code !in 200..299 || !j.optBoolean("ok", true)) throw Ps4Error(j.optString("error").ifBlank { "PS4 server answered HTTP ${r.code}." })
         return j
     }
     private fun fsCall(ps4: Ps4, method: String, path: String, body: String?, timeoutMs: Int): JSONObject {
-        val r = try { call(ps4, method, path, body, timeoutMs) } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(EzRemote.friendly(e)) }
+        val r = try { call(ps4, method, path, body, timeoutMs) } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(Ps4Api.friendly(e)) }
         return fsJson(ps4, r)
     }
     fun fsList(ps4: Ps4, path: String, timeoutMs: Int): List<FsEntry> {
         val a = fsCall(ps4, "GET", "/v2/fs/list?path=" + enc(path), null, timeoutMs).optJSONArray("entries") ?: JSONArray()
         return (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { e ->
-            val dt = EzRemote.parseDate(e.optString("date"))
+            val dt = Ps4Api.parseDate(e.optString("date"))
             FsEntry(e.optString("name"), e.optLong("size"), if (dt > 0) dt else e.optLong("mtime") * 1000, e.optBoolean("dir")) }
     }
     /** Size in bytes; 0 when the file does not exist (same convention as the web query). */
@@ -258,14 +258,14 @@ object EzServer {
         return if (j.optBoolean("exists", false)) j.optLong("size") else 0L
     }
     fun fsSizeSafe(ps4: Ps4, path: String, timeoutMs: Int): Long =
-        try { fsSize(ps4, path, timeoutMs) } catch (e: EzError) { if ((e.message ?: "").let { it.startsWith("Parent folder") || it.startsWith("No such") }) 0L else throw e }
+        try { fsSize(ps4, path, timeoutMs) } catch (e: Ps4Error) { if ((e.message ?: "").let { it.startsWith("Parent folder") || it.startsWith("No such") }) 0L else throw e }
     fun fsRead(ps4: Ps4, path: String, offset: Long, length: Int, timeoutMs: Int): ByteArray {
         val out = ByteArrayOutputStream(); var off = offset; var left = length
         while (left > 0) {
             val n = minOf(left, 4 shl 20)
             val c = open(ps4, "GET", "/v2/fs/read?path=" + enc(path) + "&offset=$off&length=$n", timeoutMs)
             val chunk: ByteArray = try {
-                val code = try { c.responseCode } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(EzRemote.friendly(e)) }
+                val code = try { c.responseCode } catch (e: IOException) { fsFailAt[ps4.id] = System.currentTimeMillis(); throw FsUnavailable(Ps4Api.friendly(e)) }
                 if (code == 200) c.inputStream.readBytes()
                 else fsJson(ps4, Reply(code, runCatching { c.errorStream?.bufferedReader()?.readText().orEmpty() }.getOrDefault(""))).let { ByteArray(0) }
             } finally { c.disconnect() }
@@ -275,9 +275,9 @@ object EzServer {
         return out.toByteArray()
     }
     /** op: delete {path} | rename {from,to} | mkdir {path}. */
-    fun fsOp(ps4: Ps4, op: String, body: JSONObject, timeoutMs: Int = 60_000): EzRemote.OpResult = try {
-        fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), timeoutMs); EzRemote.OpResult(true, "")
-    } catch (e: EzError) { EzRemote.OpResult(false, e.message ?: "ezRemote Server refused the request.") }
+    fun fsOp(ps4: Ps4, op: String, body: JSONObject, timeoutMs: Int = 60_000): Ps4Api.OpResult = try {
+        fsCall(ps4, "POST", "/v2/fs/$op", body.toString(), timeoutMs); Ps4Api.OpResult(true, "")
+    } catch (e: Ps4Error) { Ps4Api.OpResult(false, e.message ?: "PS4 server refused the request.") }
 
     // ---------------- deleting captures ----------------
     /** The only folders where this app deletes captures. Added to the server's WRITABLE folders (fs_roots) on demand, never by default. */
@@ -301,13 +301,13 @@ object EzServer {
                 }
             }
         }
-    } catch (e: Exception) { EzRemote.friendly(e) }
+    } catch (e: Exception) { Ps4Api.friendly(e) }
 
     /** Deletes one capture file. Only paths under the two capture folders are accepted. */
-    fun deleteCapture(ps4: Ps4, path: String): EzRemote.OpResult {
-        if (!isCapturePath(path)) return EzRemote.OpResult(false, "Refused: not a capture path.")
+    fun deleteCapture(ps4: Ps4, path: String): Ps4Api.OpResult {
+        if (!isCapturePath(path)) return Ps4Api.OpResult(false, "Refused: not a capture path.")
         return try { fsOp(ps4, "delete", JSONObject().put("path", path)) }
-        catch (e: Exception) { EzRemote.OpResult(false, if (e is FsUnavailable) (e.message ?: "The server is not reachable.") else EzRemote.friendly(e)) }
+        catch (e: Exception) { Ps4Api.OpResult(false, if (e is FsUnavailable) (e.message ?: "The server is not reachable.") else Ps4Api.friendly(e)) }
     }
 
     // ---------------- deleting from the storage browser / games (DeletePolicy decides WHAT; this only opens the door briefly) ----------------
@@ -338,7 +338,7 @@ object EzServer {
                 }
             }
         }
-    } catch (e: Exception) { null to EzRemote.friendly(e) }
+    } catch (e: Exception) { null to Ps4Api.friendly(e) }
     /** Puts fs_roots back as it was before [openWritable]. Best effort. */
     fun closeWritable(ps4: Ps4, w: Window) {
         if (!w.changed) return
@@ -369,12 +369,12 @@ object EzServer {
     /** Makes sure the server is the custom build with fs_api >= 2 and the read-only folders are set. Null = ready, otherwise an English reason (see Tx). */
     fun prepareInfo(ps4: Ps4): String? {
         forget(ps4)
-        val i = info(ps4, 4000) ?: return "ezRemote Server is not running. Launch ezRemote on the PS4."
+        val i = info(ps4, 4000) ?: return "PS4 server is not running. Launch PS4 server on the PS4."
         if (i.locked) return "The server asks for a token. Enter it in this PS4's settings."
         if (!i.custom) return "This feature needs the custom server (abdo10 or newer)."
         if (i.fsApi < 2) return "The server is too old for this feature: send the abdo10 server from the Server screen."
         val ok = try { isV2(ps4, 4000) } catch (e: Exception) { false }
-        if (!ok) return "ezRemote Server is not running. Launch ezRemote on the PS4."
+        if (!ok) return "PS4 server is not running. Launch PS4 server on the PS4."
         if (v2cache[ps4.id]?.roRoots.isNullOrEmpty() && v2cache[ps4.id]?.fsRoots.isNullOrEmpty()) return "File access through the server is switched off (Server screen)."
         return null
     }
@@ -390,7 +390,7 @@ object EzServer {
     fun installSupported(ps4: Ps4): Boolean = (v2cache[ps4.id]?.fsApi ?: 0) >= 3
     class InstallStart(val taskId: Int, val titleId: String)
     class InstallProgress(val length: Long, val transferred: Long, val errorResult: Int, val done: Boolean)
-    /** Starts installing a .pkg that is on the console (what Debug Settings -> Package Installer does). Throws EzError with the server's reason. */
+    /** Starts installing a .pkg that is on the console (what Debug Settings -> Package Installer does). Throws Ps4Error with the server's reason. */
     fun installPkg(ps4: Ps4, path: String): InstallStart {
         val j = fsCall(ps4, "POST", "/v2/install", JSONObject().put("path", path).toString(), 60_000)
         return InstallStart(j.optInt("task_id", -1), j.optString("title_id"))
@@ -406,7 +406,7 @@ object EzServer {
         var off = 0L
         while (off < size) {
             val chunk = fsRead(ps4, path, off, 4 shl 20, 30_000)
-            if (chunk.isEmpty()) throw EzError("The PS4 stopped sending the file at $off of $size bytes.")
+            if (chunk.isEmpty()) throw Ps4Error("The PS4 stopped sending the file at $off of $size bytes.")
             out.write(chunk); off += chunk.size; onProgress(off)
         }
     }
@@ -425,7 +425,7 @@ class BgEntry(val dest: String, val size: Long, val bytes: Long, val state: Int,
 }
 
 /**
- * bg_download_history.json is the persistent list of ezRemote Server. It is read ONCE when the server starts; the running server uses its
+ * bg_download_history.json is the persistent list of PS4 server. It is read ONCE when the server starts; the running server uses its
  * memory copy and rewrites the file only on some events, so edits only take effect after the server is stopped and started again.
  * At start-up an entry resumes when state==1 or (state==3 and failed_attempts<5), continuing from the .tmp size.
  * Edits here are text-level on the target element only (64-bit ids stay byte-identical), validated and read back.
@@ -436,12 +436,12 @@ object BgHistory {
     class Edit(val ok: Boolean, val message: String)
 
     private fun readText(p: Ps4): String {
-        val size = EzRemote.fileSize(p, PATH, 8000)
-        if (size <= 0) throw EzError("bg_download_history.json was not found on the PS4.")
-        if (size > (2L shl 20)) throw EzError("bg_download_history.json is unexpectedly large.")
-        val t = String(EzRemote.readRange(p, PATH, 0, size.toInt(), 10_000), Charsets.UTF_8)
+        val size = Ps4Api.fileSize(p, PATH, 8000)
+        if (size <= 0) throw Ps4Error("bg_download_history.json was not found on the PS4.")
+        if (size > (2L shl 20)) throw Ps4Error("bg_download_history.json is unexpectedly large.")
+        val t = String(Ps4Api.readRange(p, PATH, 0, size.toInt(), 10_000), Charsets.UTF_8)
         val end = t.lastIndexOf(']')
-        if (end < 0) throw EzError("bg_download_history.json is not a JSON list.")
+        if (end < 0) throw Ps4Error("bg_download_history.json is not a JSON list.")
         return t.substring(0, end + 1)
     }
     private fun parse(t: String): List<BgEntry> {
@@ -482,12 +482,12 @@ object BgHistory {
     private fun write(p: Ps4, out: String, expectEntries: Int): Edit {
         val check = try { parse(out) } catch (e: Exception) { return Edit(false, "The edited file would not be valid JSON; nothing was written.") }
         if (check.size != expectEntries) return Edit(false, "The edit would change the number of entries unexpectedly; nothing was written.")
-        val r = EzRemote.edit(p, PATH, out)
+        val r = Ps4Api.edit(p, PATH, out)
         cache.remove(p.id)
         return if (r.ok) Edit(true, "") else Edit(false, r.message)
     }
 
-    /** state=3 and failed_attempts=[attempts] on the newest entry for [dest]. Only call while ezRemote Server is NOT running. */
+    /** state=3 and failed_attempts=[attempts] on the newest entry for [dest]. Only call while PS4 server is NOT running. */
     fun mark(p: Ps4, dest: String, attempts: Int): Edit = try {
         val raw = readText(p); val spans = spans(raw)
         var best = -1; var bestTs = Long.MIN_VALUE
@@ -504,7 +504,7 @@ object BgHistory {
                 if (back != null && back.attempts == attempts && back.state == 3) w else Edit(false, "The PS4 file did not keep the change.")
             }
         }
-    } catch (e: Exception) { Edit(false, EzRemote.friendly(e)) }
+    } catch (e: Exception) { Edit(false, Ps4Api.friendly(e)) }
 
     /** Removes every entry for [dest] (the server forgets the download at its next start). ok=true also when it was not listed. */
     fun remove(p: Ps4, dest: String): Edit = try {
@@ -522,5 +522,5 @@ object BgHistory {
             val w = write(p, raw, total - removed)
             if (!w.ok) w else if (entry(read(p), dest) == null) w else Edit(false, "The PS4 file still lists this download.")
         }
-    } catch (e: Exception) { Edit(false, EzRemote.friendly(e)) }
+    } catch (e: Exception) { Edit(false, Ps4Api.friendly(e)) }
 }

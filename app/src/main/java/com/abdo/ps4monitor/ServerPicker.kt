@@ -33,20 +33,23 @@ object ServerSwitch {
                 tr("Check that \"Enable PayLoader Server\" is on in GoldHEN settings.", "تأكد أن «Enable PayLoader Server» مفعّل في إعدادات GoldHEN."))
         }
         // a custom server may already be running: remember its version so the OLD one answering is not mistaken for the new one
-        val before = withContext(Dispatchers.IO) { EzServer.info(ps4, 2500) }
+        val before = withContext(Dispatchers.IO) { Ps4Server.info(ps4, 2500) }
         val beforeVer: String? = if (before != null && before.custom && !before.locked) before.version else null
-        EzServer.forget(ps4)
+        Ps4Server.forget(ps4)
         var resent = false; var sawDown = false
         for (i in 1..14) {
             onStage(tr("Waiting for the server to start (", "بانتظار تشغيل السيرفر (") + i + "/14)…", null)
             delay(3000)
-            val r = withContext(Dispatchers.IO) { EzServer.info(ps4, 2500) }
+            val r = withContext(Dispatchers.IO) { Ps4Server.info(ps4, 2500) }
             if (r == null || !r.custom) sawDown = true
             if (r != null && r.custom) {
                 // new server = no custom server was running before, or its version differs, or the old one went away and a server came back
                 // (same version re-sent: accepted after ~18 s)
-                if (beforeVer == null || r.locked || r.version != beforeVer || sawDown || i >= 6)
+                if (beforeVer == null || r.locked || r.version != beforeVer || sawDown || i >= 6) {
+                    // first run on a clean console: make sure the server's own data folder exists (best effort, never blocks)
+                    withContext(Dispatchers.IO) { try { if (!r.locked) { Ps4Server.setFsAccess(ps4, true); Ps4Api.createFolder(ps4, "/data/ezremote-client") } } catch (e: Exception) { } }
                     return true to (if (r.locked) tr("token required", "يطلب رمزًا") else r.version)
+                }
             }
             // the old server still answers (HTTP 404 on /v2/info): after ~18 s send the file once more
             if (!resent && i >= 6 && r != null && !r.custom) {
@@ -72,7 +75,7 @@ object ServerSwitch {
     }
 
 /** Bottom sheet opened from the server line on the Home screen: our bundled server / a server built from the user's zip. */
-@Composable fun ServerPickerSheet(ps4: Ps4, info: EzServer.ServerInfo?, onDismiss: () -> Unit, onChanged: () -> Unit) {
+@Composable fun ServerPickerSheet(ps4: Ps4, info: Ps4Server.ServerInfo?, onDismiss: () -> Unit, onChanged: () -> Unit) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     val bundled = remember { BundledServer.version(ctx) }
     var job by remember { mutableStateOf<Job?>(null) }

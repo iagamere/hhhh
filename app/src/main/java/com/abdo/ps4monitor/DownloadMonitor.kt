@@ -9,7 +9,7 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Download engine. Evidence comes from ezRemote Server (port 6701, live) and, when it is not running, from bg_download_history.json.
+ * Download engine. Evidence comes from PS4 server (port 6701, live) and, when it is not running, from bg_download_history.json.
  * Every download is identified by the exact file path this app asked for (folder + unique name), so there is no file guessing.
  *   HTTP 200 on download_url = queued only.  Server SUCCESS + final file present + valid PKG = completed.
  */
@@ -52,7 +52,7 @@ object DownloadMonitor {
     private fun watched(ps4Id: String) = DownloadRepo.all.value.filter { it.ps4Id == ps4Id && isWatch(it) }
 
     // ---------------- start-up / recovery ----------------
-    /** Re-attaches monitoring after a restart. Never sends a request to ezRemote. */
+    /** Re-attaches monitoring after a restart. Never sends a request to PS4 server. */
     fun restore() {
         if (restored) { ensureAll(); return }
         restored = true
@@ -83,7 +83,7 @@ object DownloadMonitor {
     }
 
     /**
-     * ezRemote Server takes "dest" as the FINAL FILE PATH and writes "<dest>.tmp". So a folder + unique file name is always sent;
+     * PS4 server takes "dest" as the FINAL FILE PATH and writes "<dest>.tmp". So a folder + unique file name is always sent;
      * that path is then the exact identity of the download.
      */
     suspend fun submit(ps4: Ps4, url: String, destIn: String, fileNameIn: String?, retryOf: Download? = null): SubmitResult = withContext(Dispatchers.IO) {
@@ -94,18 +94,18 @@ object DownloadMonitor {
         if (retryOf == null) DownloadRepo.all.value.firstOrNull { it.ps4Id == ps4.id && it.sourceUrl == u && it.state.active && !it.superseded }
             ?.let { return@withContext SubmitResult.Duplicate("This link is already being downloaded to ${ps4.name}.") }
         val taken = HashSet<String>()
-        val viaServer = try { EzServer.isV2(ps4, 3000) } catch (e: Exception) { false }
-        try { EzRemote.list(ps4, dest, if (viaServer) 2500 else 8000).forEach { taken += it.name } } catch (e: Exception) { }   // best effort: ezRemote web is off while a game runs
-        try { EzServer.list(ps4, 3000).filter { parent(it.path) == dest }.forEach { taken += it.path.substringAfterLast('/') } } catch (e: Exception) { }
+        val viaServer = try { Ps4Server.isV2(ps4, 3000) } catch (e: Exception) { false }
+        try { Ps4Api.list(ps4, dest, if (viaServer) 2500 else 8000).forEach { taken += it.name } } catch (e: Exception) { }   // best effort: PS4 web is off while a game runs
+        try { Ps4Server.list(ps4, 3000).filter { parent(it.path) == dest }.forEach { taken += it.path.substringAfterLast('/') } } catch (e: Exception) { }
         val name = uniqueName(Names.clean(fileNameIn ?: Names.fromUrl(u)).ifBlank { "download.pkg" }, taken)
         val id = UUID.randomUUID().toString(); val now = System.currentTimeMillis()
         DownloadRepo.add(Download(id, ps4.id, u, name, dest, name, (retryOf?.attempt ?: 0) + 1, createdAt = now, submittedAt = now, notificationId = Store.nextNotifId()))
         d("Download request submitted (${ps4.name})")
         when (val r = sendLink(ps4, u, joinPath(dest, name))) {
-            is EzRemote.Submit.Rejected -> { DownloadRepo.remove(id); d("State: rejected — ${r.message}"); SubmitResult.Rejected(r.message) }
-            is EzRemote.Submit.Unreachable -> { DownloadRepo.remove(id); d("State: not sent — ${r.message}"); SubmitResult.Unreachable(r.message) }
-            EzRemote.Submit.Accepted -> {
-                DownloadRepo.update(id) { it.copy(state = DlState.QUEUED, submittedAt = System.currentTimeMillis(), note = "ezRemote accepted the request. Waiting for the PS4 to start.") }
+            is Ps4Api.Submit.Rejected -> { DownloadRepo.remove(id); d("State: rejected — ${r.message}"); SubmitResult.Rejected(r.message) }
+            is Ps4Api.Submit.Unreachable -> { DownloadRepo.remove(id); d("State: not sent — ${r.message}"); SubmitResult.Unreachable(r.message) }
+            Ps4Api.Submit.Accepted -> {
+                DownloadRepo.update(id) { it.copy(state = DlState.QUEUED, submittedAt = System.currentTimeMillis(), note = "PS4 server accepted the request. Waiting for the PS4 to start.") }
                 d("State: QUEUED (request accepted; this is NOT proof that the download started)")
                 ensureLoop(ps4.id); startSvc(); syncNotifs()
                 SubmitResult.Accepted(id)
@@ -113,19 +113,13 @@ object DownloadMonitor {
         }
     }
 
-    /**
-     * Sends a link to the PS4. With the custom server it goes straight to the server (port 6701), because ezRemote Client (and its web server on
-     * port 8080) is suspended by the PS4 while a game is running and the server is not. The original server (and any failure to reach the custom
-     * one) still goes through ezRemote Client's web server.
-     */
-    private fun sendLink(p: Ps4, url: String, path: String): EzRemote.Submit {
-        val v2 = try { EzServer.isV2(p, 4000) } catch (e: Exception) { false }
-        if (v2) {
-            val r = EzServer.add(p, url, path)
-            if (r !is EzRemote.Submit.Unreachable) { d("Link sent directly to ezRemote Server (/v2/add): ${if (r is EzRemote.Submit.Accepted) "accepted" else "rejected"}"); return r }
-            d("Direct send to ezRemote Server failed (${r.message}); trying ezRemote Client's web server")
-        }
-        return EzRemote.submit(p, url, path)
+    /** Sends a link to the PS4 server (port 6701). */
+    private fun sendLink(p: Ps4, url: String, path: String): Ps4Api.Submit {
+        val v2 = try { Ps4Server.isV2(p, 4000) } catch (e: Exception) { false }
+        if (!v2) return Ps4Api.submit(p, url, path)          // server not running: explains what to do
+        val r = Ps4Server.add(p, url, path)
+        d("Link sent to the PS4 server (/v2/add): ${if (r is Ps4Api.Submit.Accepted) "accepted" else if (r is Ps4Api.Submit.Rejected) "rejected" else "not reachable"}")
+        return r
     }
 
     /** The server's live entry for [path] when the custom server (/v2 API) is running; null for an original server or when unreachable. */
@@ -134,13 +128,13 @@ object DownloadMonitor {
         val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
         val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
         val path = dl.path ?: return@withContext tr("This download has no file path.", "هذا التحميل بلا مسار ملف.")
-        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
-        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
-        val live = v2Live(p, path) ?: return@withContext tr("Queue control needs the custom ezRemote Server and a reachable PS4.", "التحكم بالطابور يحتاج خادم ezRemote المخصص وجهازًا متاحًا.")
+        try { Ps4Server.isV2(p, 3000) } catch (e: Exception) { }
+        if (Ps4Server.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
+        val live = v2Live(p, path) ?: return@withContext tr("Queue control needs the custom PS4 server and a reachable PS4.", "التحكم بالطابور يحتاج خادم PS4 المخصص وجهازًا متاحًا.")
         val c = when (action) {
-            "now" -> EzServer.startNow(p, live.id)
-            "prio" -> EzServer.setPriority(p, live.id, prio)
-            else -> EzServer.move(p, live.id, action)
+            "now" -> Ps4Server.startNow(p, live.id)
+            "prio" -> Ps4Server.setPriority(p, live.id, prio)
+            else -> Ps4Server.move(p, live.id, action)
         }
         if (!c.ok) return@withContext tr("Could not change the queue: ", "تعذّر تغيير الطابور: ") + Tx.t(c.message)
         if (action == "now" && dl.state == DlState.PAUSED) DownloadRepo.update(id) { it.copy(state = DlState.QUEUED, note = "Resuming…", errorMessage = null, terminalNotified = false) }
@@ -149,7 +143,7 @@ object DownloadMonitor {
     }
 
     fun v2Live(p: Ps4, path: String): SrvEntry? = try {
-        if (EzServer.isV2(p, 4000)) EzServer.newest(EzServer.list(p, 4000), path)?.takeIf { it.v2 && it.id > 0 } else null
+        if (Ps4Server.isV2(p, 4000)) Ps4Server.newest(Ps4Server.list(p, 4000), path)?.takeIf { it.v2 && it.id > 0 } else null
     } catch (e: Exception) { null }
 
     /** Custom server: a failed / "needs link" download continues when the link is sent again to the SAME file path (no restart from zero). */
@@ -158,9 +152,9 @@ object DownloadMonitor {
         val live = v2Live(p, path) ?: return@withContext null
         if (live.done) return@withContext null
         when (val r = sendLink(p, old.sourceUrl, path)) {
-            is EzRemote.Submit.Rejected -> SubmitResult.Rejected(r.message)
-            is EzRemote.Submit.Unreachable -> SubmitResult.Unreachable(r.message)
-            EzRemote.Submit.Accepted -> {
+            is Ps4Api.Submit.Rejected -> SubmitResult.Rejected(r.message)
+            is Ps4Api.Submit.Unreachable -> SubmitResult.Unreachable(r.message)
+            Ps4Api.Submit.Accepted -> {
                 rts.remove(old.id)
                 DownloadRepo.update(old.id) { it.copy(state = DlState.QUEUED, note = "Link sent again; the download continues from where it stopped.", errorMessage = null, terminalNotified = false, speed = 0.0, etaSec = -1) }
                 d("${old.displayName}: link sent again to the same file (v2)")
@@ -177,7 +171,7 @@ object DownloadMonitor {
         if (now - rt.lastRelink < 20_000L) { setState(d0, DlState.STALLED, "Refreshing the expired link…"); return true }
         rt.lastRelink = now
         return when (sendLink(p, d0.sourceUrl, path)) {
-            EzRemote.Submit.Accepted -> {
+            Ps4Api.Submit.Accepted -> {
                 rt.relinks++; rt.failSince = 0
                 setState(d0, DlState.QUEUED, "The link expired and was refreshed automatically (${rt.relinks}/5).")
                 d("${d0.displayName}: expired link refreshed automatically (${rt.relinks}/5)")
@@ -194,10 +188,10 @@ object DownloadMonitor {
         if (!f.exists()) return
         if (now - (healAt[p.id] ?: 0L) < 300_000L) return
         healAt[p.id] = now
-        d("ezRemote Server stopped answering: sending the saved server file to ${p.name} again")
+        d("PS4 server stopped answering: sending the saved server file to ${p.name} again")
         val err = ServerLoader.send(p.host, f) { }
         if (err != null) d("Re-sending the server failed: $err")
-        else { EzServer.forget(p); d("Server file sent again; the server restarts and continues the downloads") }
+        else { Ps4Server.forget(p); d("Server file sent again; the server restarts and continues the downloads") }
     }
 
     /** Explicit user action: a NEW attempt with a new file name. The old record is kept and marked superseded. */
@@ -241,8 +235,8 @@ object DownloadMonitor {
             val p = Ps4Repo.get(ps4Id) ?: return
             val ds = watched(ps4Id); if (ds.isEmpty()) return
             val s = Store.settings()
-            val srv: List<SrvEntry>? = try { EzServer.list(p, 3000).also { upStatus(p.id) { it.copy(bg = Link.AVAILABLE) } } }      // the server answering says nothing about ezRemote web (port 8080)
-                catch (e: Exception) { upStatus(p.id) { it.copy(bg = Link.UNAVAILABLE) }; d("ezRemote Server (port 6701) not reachable: ${e.javaClass.simpleName}"); null }
+            val srv: List<SrvEntry>? = try { Ps4Server.list(p, 3000).also { upStatus(p.id) { it.copy(bg = Link.AVAILABLE) } } }      // the server answering says nothing about PS4 web (port 8080)
+                catch (e: Exception) { upStatus(p.id) { it.copy(bg = Link.UNAVAILABLE) }; d("PS4 server (port 6701) not reachable: ${e.javaClass.simpleName}"); null }
             // server silent: ask the console itself (DDP) whether it is in rest mode, off, or on without the server
             val pw = if (srv != null) Power.ON else Ps4Power.probe(p.host)
             val prevPw = status.value[p.id]?.power ?: Power.UNKNOWN
@@ -261,7 +255,6 @@ object DownloadMonitor {
                 // the console is on but the server is not running (typical right after waking from rest mode): restart it sooner
                 val limit = if (pw == Power.ON) 15_000L else 60_000L
                 if (System.currentTimeMillis() - downSince > limit) tryHeal(p, System.currentTimeMillis())
-                else upStatus(p.id) { it.copy(web = if (hist.value != null) Link.AVAILABLE else Link.UNAVAILABLE) }
             }
             syncNotifs()
             val wait = if (srv != null) s.interval * 1000L else if (System.currentTimeMillis() - downSince > 300_000L) 30_000L else 10_000L
@@ -282,12 +275,12 @@ object DownloadMonitor {
     private fun step(p: Ps4, d0: Download, srv: List<SrvEntry>?, hist: Lazy<List<BgEntry>?>, s: Settings) {
         val path = d0.path ?: return
         val rt = rts.getOrPut(d0.id) { Rt() }; val now = System.currentTimeMillis()
-        val e = srv?.let { EzServer.newest(it, path) }
+        val e = srv?.let { Ps4Server.newest(it, path) }
         if (e != null) {
-            if (EzServer.sane(e.size)) setExpected(d0, e.size)
+            if (Ps4Server.sane(e.size)) setExpected(d0, e.size)
             when {
                 e.done -> verify(p, d0, rt, e)
-                e.pending -> { rt.failSince = 0; setState(d0, DlState.QUEUED, if (e.v2) "Queued on the server." else "Queued in ezRemote Server (it downloads one file at a time).") }
+                e.pending -> { rt.failSince = 0; setState(d0, DlState.QUEUED, if (e.v2) "Queued on the server." else "Queued in PS4 server (it downloads one file at a time).") }
                 e.paused -> { rt.failSince = 0; setState(d0, DlState.PAUSED, "Paused on the PS4 server.") }
                 e.needsLink -> {
                     if (autoRelink(p, d0, rt, now)) return
@@ -299,10 +292,10 @@ object DownloadMonitor {
                     setState(d0, DlState.STALLED, "The server is retrying automatically (attempt ${e.attempts}): ${e.error}")
                 }
                 e.failed -> {
-                    if (BgHistory.entry(hist.value, path)?.stopped == true) { setState(d0, DlState.PAUSED, "ezRemote Server stopped retrying after 5 failed attempts. You can resume the download."); return }
-                    if (rt.failSince == 0L) { rt.failSince = now; d("${d0.displayName}: ezRemote Server reports FAILED (it retries up to 5 times)") }
-                    if (now - rt.failSince < FAIL_GIVE_UP_MS) setState(d0, DlState.STALLED, "ezRemote Server reported a failure and retries automatically (up to 5 times).")
-                    else setState(d0, DlState.FAILED, "", "ezRemote Server gave up after repeated failures. The link may be expired or invalid, or the host refused the request.")
+                    if (BgHistory.entry(hist.value, path)?.stopped == true) { setState(d0, DlState.PAUSED, "PS4 server stopped retrying after 5 failed attempts. You can resume the download."); return }
+                    if (rt.failSince == 0L) { rt.failSince = now; d("${d0.displayName}: PS4 server reports FAILED (it retries up to 5 times)") }
+                    if (now - rt.failSince < FAIL_GIVE_UP_MS) setState(d0, DlState.STALLED, "PS4 server reported a failure and retries automatically (up to 5 times).")
+                    else setState(d0, DlState.FAILED, "", "PS4 server gave up after repeated failures. The link may be expired or invalid, or the host refused the request.")
                 }
                 else -> {
                     rt.failSince = 0
@@ -313,22 +306,22 @@ object DownloadMonitor {
             return
         }
         if (srv != null) {                                   // reachable, but it has no entry for this download
-            if (now - d0.submittedAt < NOT_REGISTERED_MS) { setState(d0, DlState.QUEUED, "Waiting for ezRemote Server to register the download…"); return }
-            if ((try { EzRemote.fileSize(p, path, 5000) } catch (x: Exception) { 0L }) > 0) verify(p, d0, rt)
-            else if (d0.startedAt == 0L) { setState(d0, DlState.NOT_STARTED, "ezRemote Server did not register this download.", "ezRemote Server did not register this download."); d("${d0.displayName}: not in ezRemote Server's list; NOT resubmitting") }
-            else setState(d0, DlState.FAILED, "", "ezRemote Server no longer lists this download.")
+            if (now - d0.submittedAt < NOT_REGISTERED_MS) { setState(d0, DlState.QUEUED, "Waiting for PS4 server to register the download…"); return }
+            if ((try { Ps4Api.fileSize(p, path, 5000) } catch (x: Exception) { 0L }) > 0) verify(p, d0, rt)
+            else if (d0.startedAt == 0L) { setState(d0, DlState.NOT_STARTED, "PS4 server did not register this download.", "PS4 server did not register this download."); d("${d0.displayName}: not in PS4 server's list; NOT resubmitting") }
+            else setState(d0, DlState.FAILED, "", "PS4 server no longer lists this download.")
             return
         }
         val h = BgHistory.entry(hist.value, path)           // server down: the history file still knows the download
         if (h != null) {
-            if (EzServer.sane(h.size)) setExpected(d0, h.size)
-            if (h.stopped) { setState(d0, DlState.PAUSED, "Paused: ezRemote Server is not running and this download is marked stopped."); return }
+            if (Ps4Server.sane(h.size)) setExpected(d0, h.size)
+            if (h.stopped) { setState(d0, DlState.PAUSED, "Paused: PS4 server is not running and this download is marked stopped."); return }
         }
         if (status.value[p.id]?.power == Power.REST) {
-            setState(d0, DlState.SERVER_DOWN, "The PS4 is in rest mode and ezRemote Server is not answering. The app keeps watching and continues when the server answers again.")
+            setState(d0, DlState.SERVER_DOWN, "The PS4 is in rest mode and PS4 server is not answering. The app keeps watching and continues when the server answers again.")
             return
         }
-        setState(d0, DlState.SERVER_DOWN, if (hist.value != null) "ezRemote Server is not running. Launch ezRemote on the PS4." else "The PS4 is not reachable.")
+        setState(d0, DlState.SERVER_DOWN, if (hist.value != null) "PS4 server is not running. Launch PS4 server on the PS4." else "The PS4 is not reachable.")
     }
 
     /** Speed from the server's byte counter (real growth only); stalled after [Settings.stuck] seconds without growth. */
@@ -357,24 +350,24 @@ object DownloadMonitor {
     /** The server says SUCCESS. It also "succeeds" when the host answered with an error page, so the file itself is checked. */
     private fun verify(p: Ps4, d0: Download, rt: Rt, e: SrvEntry? = null) {
         val path = d0.path ?: return
-        val size = try { EzRemote.fileSize(p, path, 5000) } catch (x: Exception) {
-            // ezRemote Client's web server does not answer (the PS4 suspends it while a game runs). The custom server has already checked the file
+        val size = try { Ps4Api.fileSize(p, path, 5000) } catch (x: Exception) {
+            // PS4 server's web server does not answer (the PS4 suspends it while a game runs). The custom server has already checked the file
             // itself (HTTP status, not a web page, final size), so its own report is enough; with the original server we keep waiting for the web server.
             val sz = if (e != null && e.v2 && e.done) maxOf(e.bytes, e.size) else 0L
-            if (sz > 0 && EzServer.sane(sz)) {
+            if (sz > 0 && Ps4Server.sane(sz)) {
                 DownloadRepo.update(d0.id) { it.copy(currentSize = sz) }
                 setState(d0, DlState.COMPLETED, "")
-                d("${d0.displayName}: completed (${Fmt.bytes(sz)}), verified by the server; ezRemote web is not reachable")
+                d("${d0.displayName}: completed (${Fmt.bytes(sz)}), verified by the server; PS4 web is not reachable")
                 return
             }
             setState(d0, DlState.VERIFYING, "Checking downloaded file…"); return
         }
         if (size <= 0) {
             rt.absent++
-            val tmp = try { EzRemote.fileSize(p, "$path.tmp", 5000) } catch (x: Exception) { 0L }
+            val tmp = try { Ps4Api.fileSize(p, "$path.tmp", 5000) } catch (x: Exception) { 0L }
             when {
-                tmp > 0 && rt.absent >= 2 -> setState(d0, DlState.FAILED, "", "ezRemote Server finished but could not rename the temporary file (a folder with the same name may exist).")
-                rt.absent >= 3 -> setState(d0, DlState.FAILED, "", "ezRemote Server reported success but the file is missing (it may have been deleted).")
+                tmp > 0 && rt.absent >= 2 -> setState(d0, DlState.FAILED, "", "PS4 server finished but could not rename the temporary file (a folder with the same name may exist).")
+                rt.absent >= 3 -> setState(d0, DlState.FAILED, "", "PS4 server reported success but the file is missing (it may have been deleted).")
                 else -> setState(d0, DlState.VERIFYING, "Looking for the finished file…")
             }
             return
@@ -392,18 +385,18 @@ object DownloadMonitor {
 
     // ---------------- pause / resume / delete (edits of bg_download_history.json) ----------------
     /**
-     * ezRemote Server reads the history file only when it starts, so to PAUSE one download the server is stopped (it has no per-download
+     * PS4 server reads the history file only when it starts, so to PAUSE one download the server is stopped (it has no per-download
      * control: all its background downloads/installs stop), then the entry is marked FAILED with failed_attempts=5 (never retried).
-     * The other downloads resume by themselves the next time ezRemote is launched on the PS4.
+     * The other downloads resume by themselves the next time PS4 server is launched on the PS4.
      */
     suspend fun pause(id: String): String = withContext(Dispatchers.IO) {
         val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
         val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
         val path = dl.path ?: return@withContext tr("This download has no file path, so it cannot be paused.", "هذا التحميل بلا مسار ملف لذلك لا يمكن إيقافه مؤقتًا.")
-        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
-        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
+        try { Ps4Server.isV2(p, 3000) } catch (e: Exception) { }
+        if (Ps4Server.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
         v2Live(p, path)?.let { live ->
-            val c = EzServer.pause(p, live.id)
+            val c = Ps4Server.pause(p, live.id)
             if (!c.legacy) {
                 if (!c.ok) return@withContext tr("Could not pause: ", "تعذّر الإيقاف المؤقت: ") + Tx.t(c.message)
                 rts.remove(id)
@@ -412,14 +405,14 @@ object DownloadMonitor {
                 return@withContext tr("Paused. Your other downloads keep running.", "تم الإيقاف المؤقت. تحميلاتك الأخرى تواصل العمل.")
             }
         }
-        if (EzServer.up(p) && !EzServer.stop(p)) return@withContext tr("ezRemote Server did not stop, so nothing was changed.", "لم يتوقف خادم ezRemote لذلك لم يتغير شيء.")
+        if (Ps4Server.up(p) && !Ps4Server.stop(p)) return@withContext tr("PS4 server did not stop, so nothing was changed.", "لم يتوقف خادم PS4 لذلك لم يتغير شيء.")
         val r = BgHistory.mark(p, path, 5)
         if (!r.ok) return@withContext tr("Could not pause: ", "تعذّر الإيقاف المؤقت: ") + Tx.t(r.message)
         rts.remove(id)
-        DownloadRepo.update(id) { it.copy(state = DlState.PAUSED, note = "Paused by you. ezRemote Server was stopped and this download is marked stopped in bg_download_history.json.", speed = 0.0, etaSec = -1) }
+        DownloadRepo.update(id) { it.copy(state = DlState.PAUSED, note = "Paused by you. PS4 server was stopped and this download is marked stopped in bg_download_history.json.", speed = 0.0, etaSec = -1) }
         syncNotifs(); d("${dl.displayName}: paused (history entry marked failed_attempts=5)")
-        tr("Paused. ezRemote Server was stopped; launch ezRemote on the PS4 to continue your other downloads. This one stays paused until you resume it.",
-           "تم الإيقاف المؤقت. أُوقف خادم ezRemote؛ شغّل ezRemote على الـPS4 لمتابعة تحميلاتك الأخرى. هذا التحميل يبقى متوقفًا حتى تستأنفه.")
+        tr("Paused. PS4 server was stopped; launch PS4 server on the PS4 to continue your other downloads. This one stays paused until you resume it.",
+           "تم الإيقاف المؤقت. أُوقف خادم PS4؛ شغّل PS4 server على الـPS4 لمتابعة تحميلاتك الأخرى. هذا التحميل يبقى متوقفًا حتى تستأنفه.")
     }
 
     /** RESUME: failed_attempts back to 1 (state FAILED). The server continues from the .tmp size when it is started again. */
@@ -427,10 +420,10 @@ object DownloadMonitor {
         val dl = DownloadRepo.get(id) ?: return@withContext tr("Download not found.", "التحميل غير موجود.")
         val p = Ps4Repo.get(dl.ps4Id) ?: return@withContext tr("That PS4 profile no longer exists.", "ملف هذا الـPS4 لم يعد موجودًا.")
         val path = dl.path ?: return@withContext tr("This download has no file path.", "هذا التحميل بلا مسار ملف.")
-        try { EzServer.isV2(p, 3000) } catch (e: Exception) { }
-        if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
+        try { Ps4Server.isV2(p, 3000) } catch (e: Exception) { }
+        if (Ps4Server.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.")
         v2Live(p, path)?.let { live ->
-            val c = EzServer.resume(p, live.id)
+            val c = Ps4Server.resume(p, live.id)
             if (!c.legacy) {
                 if (!c.ok) return@withContext tr("Could not resume: ", "تعذّر الاستئناف: ") + Tx.t(c.message)
                 rts.remove(id)
@@ -439,20 +432,20 @@ object DownloadMonitor {
                 return@withContext tr("Resuming. Nothing needs to be restarted on the PS4.", "جارٍ الاستئناف. لا حاجة لإعادة تشغيل أي شيء على الـPS4.")
             }
         }
-        if (EzServer.up(p) && !EzServer.stop(p)) return@withContext tr("ezRemote Server did not stop, so nothing was changed.", "لم يتوقف خادم ezRemote لذلك لم يتغير شيء.")
+        if (Ps4Server.up(p) && !Ps4Server.stop(p)) return@withContext tr("PS4 server did not stop, so nothing was changed.", "لم يتوقف خادم PS4 لذلك لم يتغير شيء.")
         val r = BgHistory.mark(p, path, 1)
         if (!r.ok) return@withContext tr("Could not resume: ", "تعذّر الاستئناف: ") + Tx.t(r.message)
         rts.remove(id)
-        DownloadRepo.update(id) { it.copy(state = DlState.SERVER_DOWN, note = "Waiting for ezRemote Server… launch ezRemote on the PS4 so it reloads the download list.", errorMessage = null, terminalNotified = false,
+        DownloadRepo.update(id) { it.copy(state = DlState.SERVER_DOWN, note = "Waiting for PS4 server… launch PS4 server on the PS4 so it reloads the download list.", errorMessage = null, terminalNotified = false,
             speed = 0.0, etaSec = -1, startedAt = if (it.currentSize > 0 && it.startedAt == 0L) System.currentTimeMillis() else it.startedAt) }
         ensureLoop(p.id); startSvc()
         d("${dl.displayName}: resume prepared (history entry set to failed_attempts=1)")
-        tr("Resume prepared. Launch ezRemote on the PS4 now so ezRemote Server reloads the list; the download continues from the partial file and this app will pick it up.",
-           "تم تجهيز الاستئناف. شغّل ezRemote على الـPS4 الآن ليعيد خادم ezRemote تحميل القائمة؛ سيكمل التحميل من الملف الجزئي وسيلتقطه التطبيق.")
+        tr("Resume prepared. Launch PS4 server on the PS4 now so PS4 server reloads the list; the download continues from the partial file and this app will pick it up.",
+           "تم تجهيز الاستئناف. شغّل PS4 server على الـPS4 الآن ليعيد خادم PS4 تحميل القائمة؛ سيكمل التحميل من الملف الجزئي وسيلتقطه التطبيق.")
     }
 
     /**
-     * DELETE: a running download is cancelled by stopping ezRemote Server and removing its entry from bg_download_history.json
+     * DELETE: a running download is cancelled by stopping PS4 server and removing its entry from bg_download_history.json
      * (otherwise it would start again), then the partial / finished file is deleted. A finished download only needs the file step.
      */
     suspend fun delete(id: String, deleteFiles: Boolean): String = withContext(Dispatchers.IO) {
@@ -460,16 +453,16 @@ object DownloadMonitor {
         val p = Ps4Repo.get(dl.ps4Id); val path = dl.path
         val parts = ArrayList<String>()
         var v2Done = false
-        if (p != null) { try { EzServer.isV2(p, 3000) } catch (e: Exception) { }; if (EzServer.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.") }
+        if (p != null) { try { Ps4Server.isV2(p, 3000) } catch (e: Exception) { }; if (Ps4Server.isLocked(p)) return@withContext tr("The server asks for a token. Enter it in this PS4's settings in the app.", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز في التطبيق.") }
         if (p != null && path != null) {
             v2Live(p, path)?.let { live ->
-                val c = EzServer.delete(p, live.id, deleteFiles)
+                val c = Ps4Server.delete(p, live.id, deleteFiles)
                 if (!c.legacy) {
                     if (!c.ok) return@withContext tr("Could not delete on the server: ", "تعذّر الحذف على الخادم: ") + Tx.t(c.message)
                     v2Done = true
                     // a running download needs a moment to stop writing: wait until the server no longer lists it
                     for (i in 0 until 12) {
-                        val gone = try { EzServer.newest(EzServer.list(p, 3000), path)?.id != live.id } catch (e: Exception) { true }
+                        val gone = try { Ps4Server.newest(Ps4Server.list(p, 3000), path)?.id != live.id } catch (e: Exception) { true }
                         if (gone) break
                         Thread.sleep(500)
                     }
@@ -477,20 +470,20 @@ object DownloadMonitor {
             }
         }
         if (p != null && path != null && dl.state != DlState.COMPLETED && !v2Done) {
-            val live = try { EzServer.newest(EzServer.list(p, 3000), path) } catch (e: Exception) { null }
+            val live = try { Ps4Server.newest(Ps4Server.list(p, 3000), path) } catch (e: Exception) { null }
             if (live != null && (live.pending || live.active)) {
-                if (!EzServer.stop(p)) return@withContext tr("ezRemote Server did not stop, so nothing was changed.", "لم يتوقف خادم ezRemote لذلك لم يتغير شيء.")
-                parts += tr("ezRemote Server was stopped to cancel it; launch ezRemote on the PS4 to continue your other downloads.", "أُوقف خادم ezRemote لإلغائه؛ شغّل ezRemote على الـPS4 لمتابعة تحميلاتك الأخرى.")
+                if (!Ps4Server.stop(p)) return@withContext tr("PS4 server did not stop, so nothing was changed.", "لم يتوقف خادم PS4 لذلك لم يتغير شيء.")
+                parts += tr("PS4 server was stopped to cancel it; launch PS4 server on the PS4 to continue your other downloads.", "أُوقف خادم PS4 لإلغائه؛ شغّل PS4 server على الـPS4 لمتابعة تحميلاتك الأخرى.")
             }
             val r = BgHistory.remove(p, path)
             if (!r.ok && dl.state.active) return@withContext tr("Could not remove it from bg_download_history.json (it would start again): ", "تعذّرت إزالته من bg_download_history.json (سيبدأ من جديد): ") + Tx.t(r.message)
             if (!r.ok) parts += tr("History file not updated: ", "لم يُحدَّث ملف السجل: ") + Tx.t(r.message)
         }
         if (deleteFiles && p != null && path != null) {
-            val existing = listOf("$path.tmp", path).filter { f -> (try { EzRemote.fileSize(p, f, 5000) } catch (e: Exception) { 0L }) > 0 }
+            val existing = listOf("$path.tmp", path).filter { f -> (try { Ps4Api.fileSize(p, f, 5000) } catch (e: Exception) { 0L }) > 0 }
             if (existing.isNotEmpty()) {
-                val r = try { EzRemote.remove(p, existing) } catch (e: Exception) { EzRemote.OpResult(false, EzRemote.friendly(e)) }
-                val left = existing.filter { f -> (try { EzRemote.fileSize(p, f, 5000) } catch (e: Exception) { 1L }) > 0 }
+                val r = try { Ps4Api.remove(p, existing) } catch (e: Exception) { Ps4Api.OpResult(false, Ps4Api.friendly(e)) }
+                val left = existing.filter { f -> (try { Ps4Api.fileSize(p, f, 5000) } catch (e: Exception) { 1L }) > 0 }
                 if (left.isNotEmpty()) { parts += tr("The file could not be deleted: ", "تعذّر حذف الملف: ") + Tx.t(r.message); return@withContext parts.joinToString("\n") }
                 parts += tr("File deleted from the PS4.", "حُذف الملف من الـPS4.")
             }
@@ -502,7 +495,7 @@ object DownloadMonitor {
     }
 
     // ---------------- discovery ----------------
-    /** Downloads this app does not know (started in ezRemote itself, or stopped for good): exact path, real size and state. */
+    /** Downloads this app does not know (started in PS4 server itself, or stopped for good): exact path, real size and state. */
     private fun adopt(p: Ps4, srv: List<SrvEntry>?, hist: List<BgEntry>?) {
         data class C(val path: String, val size: Long, val bytes: Long, val stopped: Boolean)
         val cands = LinkedHashMap<String, C>()
@@ -512,10 +505,10 @@ object DownloadMonitor {
         var added = false
         for (c in cands.values.filter { it.path !in known && !Store.ignored(p.id, it.path) }) {
             val dir = parent(c.path); val name = c.path.substringAfterLast('/'); val now = System.currentTimeMillis()
-            val have = maxOf(c.bytes, try { EzRemote.fileSize(p, c.path + ".tmp", 4000) } catch (e: Exception) { 0L })
-            DownloadRepo.add(Download(UUID.randomUUID().toString(), p.id, "", name, dir, name, expectedSize = c.size.takeIf { EzServer.sane(it) }, currentSize = have,
+            val have = maxOf(c.bytes, try { Ps4Api.fileSize(p, c.path + ".tmp", 4000) } catch (e: Exception) { 0L })
+            DownloadRepo.add(Download(UUID.randomUUID().toString(), p.id, "", name, dir, name, expectedSize = c.size.takeIf { Ps4Server.sane(it) }, currentSize = have,
                 state = if (c.stopped) DlState.PAUSED else DlState.QUEUED, startedAt = if (have > 0) now else 0L,
-                note = if (c.stopped) "ezRemote Server stopped retrying after 5 failed attempts. You can resume the download." else "Found in ezRemote Server (not started from this app).",
+                note = if (c.stopped) "PS4 server stopped retrying after 5 failed attempts. You can resume the download." else "Found in PS4 server (not started from this app).",
                 createdAt = now, submittedAt = now, notificationId = Store.nextNotifId()))
             d("Adopted: $name"); added = true
         }
@@ -525,14 +518,11 @@ object DownloadMonitor {
     /** Connection test + discovery. Used by Home and the PS4 editor. */
     suspend fun probe(p: Ps4): String = withContext(Dispatchers.IO) {
         val s = Store.settings(); val parts = ArrayList<String>()
-        var webOk = false; var srv: List<SrvEntry>? = null
-        try { EzRemote.list(p, norm(p.dest), s.timeout * 1000); webOk = true; parts += "ezRemote web: OK" } catch (e: Exception) { d("Probe web: ${e.javaClass.simpleName}: ${e.message}"); parts += "ezRemote web: " + EzRemote.friendly(e) }
-        EzServer.forget(p)
-        try { srv = EzServer.list(p, 4000); parts += "ezRemote Server: OK" + if (EzServer.isV2Known(p)) " (custom build, /v2)" else "" } catch (e: Exception) { d("Probe server: ${e.javaClass.simpleName}"); parts += "ezRemote Server: not reachable (is it running? port 6701)" }
-        if (!webOk && srv != null && EzServer.isV2Known(p)) parts += "Downloads do not need ezRemote web with the custom server (the PS4 suspends ezRemote while a game runs). Files and covers do."
-        upStatus(p.id) { it.copy(web = if (webOk) Link.AVAILABLE else Link.UNAVAILABLE, bg = if (srv != null) Link.AVAILABLE else Link.UNAVAILABLE) }
-        val hist = if (webOk) try { BgHistory.read(p) } catch (e: Exception) { null } else null
-        adopt(p, srv, hist)
+        var srv: List<SrvEntry>? = null
+        Ps4Server.forget(p)
+        try { srv = Ps4Server.list(p, 4000); parts += "PS4 server: OK" + if (Ps4Server.isV2Known(p)) " (custom build, /v2)" else "" } catch (e: Exception) { d("Probe server: ${e.javaClass.simpleName}"); parts += "PS4 server: not reachable (is GoldHEN running? send the server from Home)" }
+        upStatus(p.id) { it.copy(bg = if (srv != null) Link.AVAILABLE else Link.UNAVAILABLE) }
+        adopt(p, srv, null)
         val pw = if (srv != null) Power.ON else Ps4Power.probe(p.host)
         upStatus(p.id) { it.copy(power = pw) }
         parts += tr("PS4 power: ", "حالة الـPS4: ") + pw.label

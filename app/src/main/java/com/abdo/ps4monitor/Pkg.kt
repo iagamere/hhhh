@@ -15,7 +15,7 @@ import java.security.MessageDigest
 
 /**
  * PS4 PKG reader. Everything here is derived from the PKG container layout (big-endian header, 32-byte entry table, PSF "param.sfo")
- * as documented by the community (psdevwiki / shadPS4). It is NOT derived from the ezRemote source and has not been verified against
+ * as documented by the community (psdevwiki / shadPS4). It is NOT derived from the PS4 server source and has not been verified against
  * your own files yet; every field is range-checked and the raw numbers are shown so a wrong assumption is visible, not hidden.
  * Only unencrypted entries are read (param.sfo, icon0.png, pic*.png). Nothing is decrypted.
  */
@@ -183,14 +183,14 @@ object PkgInspector {
     val mutex = Mutex()          // one PKG read at a time: the PS4 is small and also serves the monitor
     class Result(val info: PkgInfo?, val error: String?, val notPkg: Boolean)
 
-    fun readBytes(p: Ps4, path: String, off: Long, len: Int): ByteArray = EzRemote.readRange(p, path, off, len, Store.settings().timeout * 1000)
-    fun browse(p: Ps4, dir: String): List<FsEntry> = EzRemote.list(p, DownloadMonitor.norm(dir), Store.settings().timeout * 1000)
+    fun readBytes(p: Ps4, path: String, off: Long, len: Int): ByteArray = Ps4Api.readRange(p, path, off, len, Store.settings().timeout * 1000)
+    fun browse(p: Ps4, dir: String): List<FsEntry> = Ps4Api.list(p, DownloadMonitor.norm(dir), Store.settings().timeout * 1000)
     private val PNG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
     private fun isPng(b: ByteArray) = b.size > 8 && (0 until 4).all { b[it] == PNG[it] }
-    fun friendly(e: Exception) = when (e) { is PkgError -> e.message ?: "PKG error"; else -> EzRemote.friendly(e) }
+    fun friendly(e: Exception) = when (e) { is PkgError -> e.message ?: "PKG error"; else -> Ps4Api.friendly(e) }
 
     fun sizeOf(p: Ps4, path: String): Long? {
-        try { val n = EzRemote.fileSize(p, path, Store.settings().timeout * 1000); if (n > 0) return n } catch (e: Exception) { }      // cheap single-file query
+        try { val n = Ps4Api.fileSize(p, path, Store.settings().timeout * 1000); if (n > 0) return n } catch (e: Exception) { }      // cheap single-file query
         val dir = path.substringBeforeLast('/', "/").ifEmpty { "/" }; val name = path.substringAfterLast('/')
         return browse(p, dir).firstOrNull { it.name == name }?.size
     }

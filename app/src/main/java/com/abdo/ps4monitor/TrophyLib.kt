@@ -34,22 +34,22 @@ object TrophyLib {
     private val roSent = ConcurrentHashMap.newKeySet<String>()
 
     /** The account folders and the profile-picture folders must be readable by the server (sent once per PS4 per app run). */
-    private fun ensureRo(ps4: Ps4) { if (roSent.add(ps4.id)) { val ok = runCatching { EzServer.setRoExtra(ps4, EzServer.roExtra().joinToString("\n")) == null }.getOrDefault(false); if (!ok) roSent.remove(ps4.id) } }
+    private fun ensureRo(ps4: Ps4) { if (roSent.add(ps4.id)) { val ok = runCatching { Ps4Server.setRoExtra(ps4, Ps4Server.roExtra().joinToString("\n")) == null }.getOrDefault(false); if (!ok) roSent.remove(ps4.id) } }
 
     fun accounts(ps4: Ps4): Pair<List<Account>, List<String>> {
         ensureRo(ps4)
         val notes = ArrayList<String>(); val out = ArrayList<Account>()
-        val l = try { EzServer.fsList(ps4, "/user/home", 8000) } catch (e: Exception) { notes += "/user/home: ${e.message}"; return out to notes }
+        val l = try { Ps4Server.fsList(ps4, "/user/home", 8000) } catch (e: Exception) { notes += "/user/home: ${e.message}"; return out to notes }
         val profRoot = "/system_data/priv/cache/profile"
-        val profDirs = try { EzServer.fsList(ps4, profRoot, 8000).also { notes += "$profRoot: " + it.take(20).joinToString { x -> x.name } } } catch (e: Exception) { notes += "$profRoot: ${e.message}"; emptyList() }
+        val profDirs = try { Ps4Server.fsList(ps4, profRoot, 8000).also { notes += "$profRoot: " + it.take(20).joinToString { x -> x.name } } } catch (e: Exception) { notes += "$profRoot: ${e.message}"; emptyList() }
         val IMG = Regex("(?i).+\\.(png|jpg|jpeg|webp)$")
         fun images(dir: String): List<String> = try {
-            EzServer.fsList(ps4, dir, 6000).filter { !it.isDir && IMG.matches(it.name) }
+            Ps4Server.fsList(ps4, dir, 6000).filter { !it.isDir && IMG.matches(it.name) }
                 .sortedWith(compareByDescending<FsEntry> { it.name.contains("avatar", true) }.thenByDescending { it.size }).map { "$dir/${it.name}" }
         } catch (e: Exception) { emptyList() }
         for (d in l.filter { it.isDir && HEX8.matches(it.name) }) {
             val id = d.name.lowercase()
-            val name = runCatching { String(EzServer.fsRead(ps4, "/user/home/${d.name}/username.dat", 0, 64, 5000), Charsets.UTF_8).trim { c -> c == '\u0000' || c.isWhitespace() } }.getOrDefault("").ifBlank { id }
+            val name = runCatching { String(Ps4Server.fsRead(ps4, "/user/home/${d.name}/username.dat", 0, 64, 5000), Charsets.UTF_8).trim { c -> c == '\u0000' || c.isWhitespace() } }.getOrDefault("").ifBlank { id }
             val av = listOf("avatar.png", "avatar440.png", "avatar260.png", "avatar128.png", "avatar64.png").flatMap { f ->
                 listOf(id, "0x$id", d.name).distinct().map { "/system_data/priv/cache/profile/$it/$f" } }
             val dec = id.toLongOrNull(16)?.toString()
@@ -73,7 +73,7 @@ object TrophyLib {
     fun npwrIds(ps4: Ps4, titleId: String, notes: MutableList<String> = ArrayList()): List<String> {
         for (base in baseDirs(titleId)) {
             val p = "$base/npbind.dat"
-            val b = try { EzServer.fsRead(ps4, p, 0, 256 * 1024, 6000) } catch (e: Exception) { notes += "$p: ${e.message}"; continue }
+            val b = try { Ps4Server.fsRead(ps4, p, 0, 256 * 1024, 6000) } catch (e: Exception) { notes += "$p: ${e.message}"; continue }
             val ids = NPWR.findAll(String(b, Charsets.ISO_8859_1)).map { it.value }.distinct().toList()
             if (ids.isNotEmpty()) return ids
             notes += "$p: read (${b.size} bytes) but no NPWR id inside"
@@ -95,7 +95,7 @@ object TrophyLib {
     /** No NPWR id known: look through the console's shared trophy folder and take the pack whose title is this game's title. */
     fun findPackByTitle(ps4: Ps4, gameTitle: String, notes: MutableList<String>): TrophyPack? {
         val root = "/user/trophy/conf"
-        val dirs = try { EzServer.fsList(ps4, root, 8000).also { notes += "$root: ${it.size} entries" } } catch (e: Exception) { notes += "$root: ${e.message}"; return null }
+        val dirs = try { Ps4Server.fsList(ps4, root, 8000).also { notes += "$root: ${it.size} entries" } } catch (e: Exception) { notes += "$root: ${e.message}"; return null }
         val want = norm(gameTitle)
         for (d in dirs.filter { it.isDir }.take(80)) {
             val p = loadPackFrom(ps4, "$root/${d.name}", emptyList(), ArrayList()) ?: continue
@@ -109,20 +109,20 @@ object TrophyLib {
     /** Lists what is really in the game's folders, for the diagnostic text. */
     fun listing(ps4: Ps4, titleId: String): List<String> {
         val out = ArrayList<String>()
-        for (b in baseDirs(titleId).take(3)) out += try { "$b: " + EzServer.fsList(ps4, b, 6000).take(30).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { "$b: ${e.message}" }
+        for (b in baseDirs(titleId).take(3)) out += try { "$b: " + Ps4Server.fsList(ps4, b, 6000).take(30).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { "$b: ${e.message}" }
         return out
     }
 
     private fun loadPackFrom(ps4: Ps4, dir: String, npwrs: List<String>, notes: MutableList<String>): TrophyPack? {
-        val trps = try { EzServer.fsList(ps4, dir, 8000).filter { !it.isDir && it.name.endsWith(".trp", true) }.sortedBy { it.name } } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
+        val trps = try { Ps4Server.fsList(ps4, dir, 8000).filter { !it.isDir && it.name.endsWith(".trp", true) }.sortedBy { it.name } } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
         if (trps.isEmpty()) notes += "$dir: no .trp file"
         for (t in trps) {
             val path = "$dir/${t.name}"
-            val head = try { EzServer.fsRead(ps4, path, 0, 64, 8000) } catch (e: Exception) { continue }
+            val head = try { Ps4Server.fsRead(ps4, path, 0, 64, 8000) } catch (e: Exception) { continue }
             if (head.size < 64 || be32(head, 0) != 0xDCA24D00L) continue
             val count = be32(head, 0x10).toInt(); val elSize = be32(head, 0x14).toInt().let { if (it in 0x20..0x100) it else 0x40 }
             if (count !in 1..4000) continue
-            val table = try { EzServer.fsRead(ps4, path, 0x40, count * elSize, 15000) } catch (e: Exception) { continue }
+            val table = try { Ps4Server.fsRead(ps4, path, 0x40, count * elSize, 15000) } catch (e: Exception) { continue }
             if (table.size < count * elSize) continue
             val files = LinkedHashMap<String, Pair<Long, Long>>()
             for (i in 0 until count) {
@@ -131,7 +131,7 @@ object TrophyLib {
                 files[nm] = be64(table, o + 32) to be64(table, o + 40)
             }
             val cfg = files.entries.firstOrNull { it.key.endsWith(".SFM", true) }
-            val xml = cfg?.let { (_, v) -> runCatching { String(EzServer.fsRead(ps4, path, v.first, v.second.coerceAtMost(2L shl 20).toInt(), 15000), Charsets.UTF_8) }.getOrNull() }
+            val xml = cfg?.let { (_, v) -> runCatching { String(Ps4Server.fsRead(ps4, path, v.first, v.second.coerceAtMost(2L shl 20).toInt(), 15000), Charsets.UTF_8) }.getOrNull() }
             val list = ArrayList<Trophy>(); var title = ""; var readable = false
             if (xml != null && xml.contains("<trophyconf", true)) {
                 title = Regex("<title-name>(.*?)</title-name>", RegexOption.DOT_MATCHES_ALL).find(xml)?.groupValues?.get(1)?.let(::unesc) ?: ""
@@ -163,11 +163,11 @@ object TrophyLib {
         val f = File(cache, "trop_" + (ps4.id + path).hashCode().toUInt().toString(16) + ".db")
         val s = "${e.size}|${e.mtime}"
         if (f.exists() && sig[f.name] == s) return f
-        return try { f.outputStream().use { EzServer.fsCopyTo(ps4, path, e.size, it) { } }; sig[f.name] = s; f } catch (ex: Exception) { f.delete(); null }
+        return try { f.outputStream().use { Ps4Server.fsCopyTo(ps4, path, e.size, it) { } }; sig[f.name] = s; f } catch (ex: Exception) { f.delete(); null }
     }
 
     private fun walkDbs(ps4: Ps4, base: String, depth: Int, out: MutableList<Pair<String, FsEntry>>, notes: MutableList<String>) {
-        val l = try { EzServer.fsList(ps4, base, 8000) } catch (e: Exception) { if (depth == 0) notes += "$base: ${e.message}"; return }
+        val l = try { Ps4Server.fsList(ps4, base, 8000) } catch (e: Exception) { if (depth == 0) notes += "$base: ${e.message}"; return }
         for (e in l) {
             val p = "$base/${e.name}"
             if (e.isDir) { if (depth < 4 && out.size < 80) walkDbs(ps4, p, depth + 1, out, notes) }
@@ -193,7 +193,7 @@ object TrophyLib {
     }
 
     private fun copyTo(ps4: Ps4, path: String, e: FsEntry, dest: File): Boolean =
-        try { dest.outputStream().use { EzServer.fsCopyTo(ps4, path, e.size, it) { } }; true } catch (ex: Exception) { dest.delete(); false }
+        try { dest.outputStream().use { Ps4Server.fsCopyTo(ps4, path, e.size, it) { } }; true } catch (ex: Exception) { dest.delete(); false }
 
     /**
      * The console keeps every account's trophies in /user/home/<id>/trophy/db/trophy_local.db (SQLite). Layout taken from the open-source tool
@@ -276,8 +276,8 @@ object TrophyLib {
     fun accountDb(ps4: Ps4, account: Account, npwr: String, gameTitle: String, cache: File, notes: MutableList<String>, opened: BooleanArray = BooleanArray(1)): AccountDb? {
         val tdir = "/user/home/${account.id}/trophy"
         val dir = "$tdir/db"
-        notes += "$tdir: " + (try { EzServer.fsList(ps4, tdir, 8000).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { e.message ?: "?" })
-        val l = try { EzServer.fsList(ps4, dir, 8000) } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
+        notes += "$tdir: " + (try { Ps4Server.fsList(ps4, tdir, 8000).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { e.message ?: "?" })
+        val l = try { Ps4Server.fsList(ps4, dir, 8000) } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
         // trophy_local.db is where Apollo finds the trophies; any other .db in the folder is checked for the same tables and described when it does not match
         val files = l.filter { !it.isDir && it.name.endsWith(".db", true) }.sortedByDescending { it.name == "trophy_local.db" }
         if (files.isEmpty()) { notes += "$dir has no .db file (found: " + l.take(12).joinToString { it.name } + ")"; return null }

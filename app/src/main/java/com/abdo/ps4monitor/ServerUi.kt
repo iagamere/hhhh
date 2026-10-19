@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
     val ps4List by Ps4Repo.list.collectAsState()
     val p = remember(activeId, ps4List) { Ps4Repo.active() }
     var tokenText by remember { mutableStateOf("") }
-    var info by remember { mutableStateOf<EzServer.ServerInfo?>(null) }
+    var info by remember { mutableStateOf<Ps4Server.ServerInfo?>(null) }
     var checked by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(-1) }
@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
 
     fun refresh() {
         val pp = p ?: return
-        scope.launch { busy = true; info = withContext(Dispatchers.IO) { EzServer.info(pp) }; checked = true; busy = false }
+        scope.launch { busy = true; info = withContext(Dispatchers.IO) { Ps4Server.info(pp) }; checked = true; busy = false }
     }
     LaunchedEffect(p?.id) { refresh() }
 
@@ -58,14 +58,14 @@ import kotlinx.coroutines.withContext
             progress = -1
             if (err != null) { msg = tr("Could not send: ", "تعذّر الإرسال: ") + Tx.t(err); busy = false; return@launch }
             msg = tr("Sent. Waiting for the server to start…", "أُرسل. بانتظار تشغيل السيرفر…")
-            EzServer.forget(pp)
-            var found: EzServer.ServerInfo? = null
+            Ps4Server.forget(pp)
+            var found: Ps4Server.ServerInfo? = null
             for (i in 0 until 14) {
                 delay(2000)
-                val r = withContext(Dispatchers.IO) { EzServer.info(pp, 2000) }
+                val r = withContext(Dispatchers.IO) { Ps4Server.info(pp, 2000) }
                 if (r != null && r.custom) { found = r; break }
             }
-            info = found ?: withContext(Dispatchers.IO) { EzServer.info(pp) }
+            info = found ?: withContext(Dispatchers.IO) { Ps4Server.info(pp) }
             msg = if (found != null) tr("The custom server is running (", "السيرفر المخصص يعمل (") + found.version + ")"
                   else tr("The PS4 received the file but the server did not answer. Watch the PS4 screen and check the log.", "استلم الـPS4 الملف لكن السيرفر لم يستجب. راقب شاشة الـPS4 وافحص السجل.")
             busy = false
@@ -74,9 +74,9 @@ import kotlinx.coroutines.withContext
     fun push(json: String) {
         val pp = p ?: return
         scope.launch {
-            val c = withContext(Dispatchers.IO) { EzServer.updateSettings(pp, json) }
+            val c = withContext(Dispatchers.IO) { Ps4Server.updateSettings(pp, json) }
             if (!c.ok) msg = tr("Could not change the setting: ", "تعذّر تغيير الإعداد: ") + Tx.t(c.message)
-            info = withContext(Dispatchers.IO) { EzServer.info(pp) }
+            info = withContext(Dispatchers.IO) { Ps4Server.info(pp) }
         }
     }
     fun showLog() {
@@ -84,15 +84,15 @@ import kotlinx.coroutines.withContext
         scope.launch {
             busy = true
             logText = withContext(Dispatchers.IO) {
-                try { if (info?.custom == true) EzServer.log(pp, 80) else EzServer.logFile(pp) }
-                catch (e: Exception) { try { EzServer.logFile(pp) } catch (e2: Exception) { EzRemote.friendly(e2) } }
+                try { if (info?.custom == true) Ps4Server.log(pp, 80) else Ps4Server.logFile(pp) }
+                catch (e: Exception) { try { Ps4Server.logFile(pp) } catch (e2: Exception) { Ps4Api.friendly(e2) } }
             }
             busy = false
         }
     }
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BackHeader(tr("ezRemote Server", "خادم ezRemote"), nav) { TextButton(onClick = { refresh() }, enabled = !busy) { Lbl(tr("Refresh", "تحديث")) } }
+        BackHeader(tr("PS4 server", "خادم PS4"), nav) { TextButton(onClick = { refresh() }, enabled = !busy) { Lbl(tr("Refresh", "تحديث")) } }
         if (p == null) { EmptyState(R.drawable.ic_console, tr("Add a PS4 first.", "أضف جهاز PS4 أولًا.")); return@Column }
         val i = info
 
@@ -103,7 +103,7 @@ import kotlinx.coroutines.withContext
                 i == null -> tr("Not reachable on ${p.host}:6701", "غير متاح على ${p.host}:6701")
                 i.locked -> tr("The server asks for a token. Enter it in this PS4's settings (Settings > edit PS4).", "الخادم يطلب رمزًا. أدخله في إعدادات هذا الجهاز (الإعدادات > تعديل PS4).")
                 i.custom -> tr("Custom server ", "السيرفر المخصص ") + i.version
-                else -> tr("Original ezRemote Server (no per-download control)", "خادم ezRemote الأصلي (بلا تحكم بتحميل واحد)")
+                else -> tr("Older PS4 server (no per-download control)", "خادم PS4 الأصلي (بلا تحكم بتحميل واحد)")
             }
             Text(line, fontWeight = FontWeight.SemiBold)
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -112,8 +112,8 @@ import kotlinx.coroutines.withContext
 
         Panel {
             SectionTitle(tr("Send the server to the PS4", "إرسال السيرفر إلى الـPS4"))
-            Dim(tr("Needs \"Enable PayLoader Server\" in GoldHEN settings (port 9090). Choose the .elf once; after that one tap sends it. Sending replaces the running ezRemote Server.",
-                "يحتاج تفعيل «Enable PayLoader Server» في إعدادات GoldHEN (المنفذ 9090). اختر ملف .elf مرة واحدة، وبعدها ضغطة واحدة ترسله. الإرسال يستبدل خادم ezRemote العامل."))
+            Dim(tr("Needs \"Enable PayLoader Server\" in GoldHEN settings (port 9090). Choose the .elf once; after that one tap sends it. Sending replaces the running PS4 server.",
+                "يحتاج تفعيل «Enable PayLoader Server» في إعدادات GoldHEN (المنفذ 9090). اختر ملف .elf مرة واحدة، وبعدها ضغطة واحدة ترسله. الإرسال يستبدل خادم PS4 العامل."))
             Dim(if (hasElf) tr("Saved file: ${elf.length() / 1024} KB. The app re-sends it by itself if the server stops while downloads are unfinished.",
                     "الملف المحفوظ: ${elf.length() / 1024} KB. يعيد التطبيق إرساله تلقائيًا إذا توقف السيرفر وفيه تحميلات غير مكتملة.")
                 else tr("No file chosen yet.", "لم يُختر ملف بعد."))
@@ -146,14 +146,14 @@ import kotlinx.coroutines.withContext
 
         if (i != null && i.custom && !i.locked) Panel {
             SectionTitle(tr("File access through the server", "الوصول إلى الملفات عبر الخادم"))
-            Dim(tr("Lets the app list, read, rename and delete files in /data and /mnt through this server (port 6701), which keeps working while a game runs. Without it the Files tab, covers and file checks need ezRemote's web server, which the PS4 suspends during games. Anyone on your network who has the token (or any device if no token is set) could read those folders.",
-                "يتيح للتطبيق عرض وقراءة وإعادة تسمية وحذف الملفات في /data و /mnt عبر هذا الخادم (المنفذ 6701) الذي يستمر بالعمل أثناء اللعب. بدونه تحتاج تبويبة الملفات والأغلفة وفحوص الملفات إلى خادم ويب ezRemote الذي يعلّقه الـPS4 أثناء الألعاب. أي جهاز في شبكتك يملك الرمز (أو أي جهاز إن لم يُضبط رمز) يستطيع قراءة هذه المجلدات."))
+            Dim(tr("Lets the app list, read, rename and delete files in /data and /mnt through this server (port 6701), which keeps working while a game runs. Without it the Files tab, covers and file checks need PS4 server's web server, which the PS4 suspends during games. Anyone on your network who has the token (or any device if no token is set) could read those folders.",
+                "يتيح للتطبيق عرض وقراءة وإعادة تسمية وحذف الملفات في /data و /mnt عبر هذا الخادم (المنفذ 6701) الذي يستمر بالعمل أثناء اللعب. بدونه تحتاج تبويبة الملفات والأغلفة وفحوص الملفات إلى خادم ويب PS4 server الذي يعلّقه الـPS4 أثناء الألعاب. أي جهاز في شبكتك يملك الرمز (أو أي جهاز إن لم يُضبط رمز) يستطيع قراءة هذه المجلدات."))
             if (i.fsApi < 1) Dim(tr("This server build has no file API. Send the newest server.", "نسخة الخادم هذه بلا واجهة ملفات. أرسل أحدث خادم."))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(tr("Allow", "السماح"), Modifier.weight(1f))
                 Switch(checked = i.fsRoots.isNotEmpty(), enabled = i.fsApi >= 1 && !busy, onCheckedChange = { v ->
                     scope.launch {
-                        val e = withContext(Dispatchers.IO) { EzServer.setFsAccess(p, v) }
+                        val e = withContext(Dispatchers.IO) { Ps4Server.setFsAccess(p, v) }
                         msg = if (e != null) Tx.t(e) else ""
                         refresh()
                     }
@@ -164,15 +164,15 @@ import kotlinx.coroutines.withContext
         if (i != null && i.custom && !i.locked) Panel {
             SectionTitle(tr("Server token", "رمز الخادم"))
             Dim(if (i.tokenSet) tr("A token is set. Every request must carry it; this app sends the one saved for this PS4.", "رمز مضبوط. يجب أن يحمله كل طلب؛ والتطبيق يرسل المحفوظ لهذا الجهاز.")
-                else tr("No token is set: any device on your network can control the server. A token protects the /v2 routes (control, files, settings). ezRemote Client's own routes (add / list downloads) stay open so it keeps working. If you forget the token, resend the server from GoldHEN and clear dlserver_settings.json on the PS4.",
-                    "لا رمز مضبوط: أي جهاز في شبكتك يستطيع التحكم بالخادم. الرمز يحمي مسارات /v2 (التحكم والملفات والإعدادات)، أما مسارات ezRemote Client نفسه (إضافة/عرض التحميلات) فتبقى مفتوحة ليستمر بالعمل. إن نسيت الرمز فأعد إرسال الخادم من GoldHEN وامسح dlserver_settings.json من الـPS4."))
+                else tr("No token is set: any device on your network can control the server. A token protects the /v2 routes (control, files, settings). PS4 server's own routes (add / list downloads) stay open so it keeps working. If you forget the token, resend the server from GoldHEN and clear dlserver_settings.json on the PS4.",
+                    "لا رمز مضبوط: أي جهاز في شبكتك يستطيع التحكم بالخادم. الرمز يحمي مسارات /v2 (التحكم والملفات والإعدادات)، أما مسارات PS4 server نفسه (إضافة/عرض التحميلات) فتبقى مفتوحة ليستمر بالعمل. إن نسيت الرمز فأعد إرسال الخادم من GoldHEN وامسح dlserver_settings.json من الـPS4."))
             OutlinedTextField(tokenText, { tokenText = it.filter { c -> c.code in 33..126 } }, label = { Text(tr("New token (empty = remove)", "الرمز الجديد (فارغ = إزالة)")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(enabled = !busy && (tokenText.isNotEmpty() || i.tokenSet), onClick = {
                 val newTok = tokenText.trim()
                 scope.launch {
                     busy = true
-                    val c = withContext(Dispatchers.IO) { EzServer.setServerToken(p, newTok) }
-                    if (c.ok) { val np = p.copy(token = newTok); Ps4Repo.save(np); EzServer.forget(np); info = withContext(Dispatchers.IO) { EzServer.info(np) }; checked = true; tokenText = ""; msg = if (newTok.isEmpty()) tr("Token removed.", "أُزيل الرمز.") else tr("Token set and saved in the app for this PS4.", "ضُبط الرمز وحُفظ في التطبيق لهذا الجهاز.") }
+                    val c = withContext(Dispatchers.IO) { Ps4Server.setServerToken(p, newTok) }
+                    if (c.ok) { val np = p.copy(token = newTok); Ps4Repo.save(np); Ps4Server.forget(np); info = withContext(Dispatchers.IO) { Ps4Server.info(np) }; checked = true; tokenText = ""; msg = if (newTok.isEmpty()) tr("Token removed.", "أُزيل الرمز.") else tr("Token set and saved in the app for this PS4.", "ضُبط الرمز وحُفظ في التطبيق لهذا الجهاز.") }
                     else msg = tr("Could not change the token: ", "تعذّر تغيير الرمز: ") + Tx.t(c.message)
                     busy = false
                 }

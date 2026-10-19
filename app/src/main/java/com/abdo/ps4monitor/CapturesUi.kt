@@ -162,13 +162,13 @@ private const val VTHUMB = 480    // video frame size
                 confirmDelete = null; selected = emptySet(); viewing = null
                 scope.launch {
                     delMsg = ""; delProg = 0 to l.size
-                    val err = withContext(Dispatchers.IO) { EzServer.allowCaptureDelete(ps4) }
+                    val err = withContext(Dispatchers.IO) { Ps4Server.allowCaptureDelete(ps4) }
                     if (err != null) { delProg = null; delMsg = tr("Could not delete: ", "تعذّر الحذف: ") + err }
                     else {
                         var ok = 0; var firstErr = ""
                         l.forEachIndexed { i, c ->
                             delProg = i to l.size
-                            val r = withContext(Dispatchers.IO) { EzServer.deleteCapture(ps4, c.path) }
+                            val r = withContext(Dispatchers.IO) { Ps4Server.deleteCapture(ps4, c.path) }
                             if (r.ok || r.message.startsWith("No such")) { ok++; gone = gone + c.path } else if (firstErr.isEmpty()) firstErr = r.message
                         }
                         delProg = null

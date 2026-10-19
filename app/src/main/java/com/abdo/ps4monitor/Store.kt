@@ -34,7 +34,7 @@ object Store {
     fun setDynamic(b: Boolean) { dynamic.value = b; sp.edit().putBoolean("dynamic", b).apply() }
     fun nextNotifId(): Int { val n = sp.getInt("notifseq", 100) + 1; sp.edit().putInt("notifseq", n).apply(); return n }
 
-    /** Paths the user deleted: never adopted again from ezRemote Server / the history file. */
+    /** Paths the user deleted: never adopted again from PS4 server / the history file. */
     fun ignore(ps4Id: String, path: String) { val s = (sp.getStringSet("ignoredsrv", emptySet()) ?: emptySet()).toMutableSet(); s += "$ps4Id|$path"; sp.edit().putStringSet("ignoredsrv", s).apply() }
     fun ignored(ps4Id: String, path: String) = (sp.getStringSet("ignoredsrv", emptySet()) ?: emptySet()).contains("$ps4Id|$path")
 
@@ -55,13 +55,13 @@ object Ps4Repo {
     fun load() {
         val l = runCatching {
             val a = JSONArray(Store.secure.getString("ps4s", "[]"))
-            (0 until a.length()).map { a.getJSONObject(it).let { o -> Ps4(o.getString("id"), o.getString("name"), o.getString("host"), o.optInt("http", 8080), o.optString("dest", "/data/pkg"), o.optString("token", ""), o.optString("wakekey", ""), o.optBoolean("autowake", false)) } }
+            (0 until a.length()).map { a.getJSONObject(it).let { o -> Ps4(o.getString("id"), o.getString("name"), o.getString("host"), o.optString("dest", "/data/pkg"), o.optString("token", ""), o.optString("wakekey", ""), o.optBoolean("autowake", false)) } }
         }.getOrDefault(emptyList())
         list.value = l
         activeId.value = Store.sp.getString("activeps4", null)?.takeIf { id -> l.any { it.id == id } } ?: l.firstOrNull()?.id
     }
     private fun persist(l: List<Ps4>) = Store.secure.edit().putString("ps4s", JSONArray(l.map {
-        JSONObject().put("id", it.id).put("name", it.name).put("host", it.host).put("http", it.httpPort).put("dest", it.dest).put("token", it.token).put("wakekey", it.wakeKey).put("autowake", it.autoWake) }).toString()).apply()
+        JSONObject().put("id", it.id).put("name", it.name).put("host", it.host).put("dest", it.dest).put("token", it.token).put("wakekey", it.wakeKey).put("autowake", it.autoWake) }).toString()).apply()
     fun get(id: String?) = list.value.firstOrNull { it.id == id }
     fun active() = get(activeId.value)
     fun setActive(id: String) { activeId.value = id; Store.sp.edit().putString("activeps4", id).apply() }

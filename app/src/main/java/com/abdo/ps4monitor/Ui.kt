@@ -92,7 +92,7 @@ fun stateIcon(s: DlState) = when (s) {
     else -> c.primaryContainer to c.onPrimaryContainer } }
 
 fun resultText(r: SubmitResult) = Tx.t(when (r) {
-    is SubmitResult.Accepted -> tr("Request accepted. Waiting for ezRemote Server to start the download…", "قُبل الطلب. بانتظار أن يبدأ خادم ezRemote التحميل…")
+    is SubmitResult.Accepted -> tr("Request accepted. Waiting for PS4 server to start the download…", "قُبل الطلب. بانتظار أن يبدأ خادم PS4 التحميل…")
     is SubmitResult.Rejected -> r.message
     is SubmitResult.Unreachable -> r.message
     is SubmitResult.Duplicate -> r.message
@@ -158,24 +158,24 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
 // ---------------------------------------------------------------- dialogs shared by Home / Downloads
 @Composable fun ConfirmPause(id: String, close: () -> Unit) {
     val p = Ps4Repo.get(DownloadRepo.get(id)?.ps4Id)
-    val v2 = p != null && EzServer.isV2Known(p)
+    val v2 = p != null && Ps4Server.isV2Known(p)
     AlertDialog(onDismissRequest = close, title = { Text(tr("Pause this download?", "إيقاف هذا التحميل مؤقتًا؟")) },
         text = { if (v2) Text(tr("Only this download is paused. Your other downloads keep running and the partial file is kept.", "يُوقف هذا التحميل فقط. تستمر تحميلاتك الأخرى ويبقى الملف الجزئي.")) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(tr("ezRemote Server only reads bg_download_history.json when it starts, so to pause it has to be stopped. That stops ALL background downloads and installs on ${p?.name ?: "the PS4"}.",
-                "خادم ezRemote لا يقرأ bg_download_history.json إلا عند إقلاعه، لذلك يجب إيقافه ليتوقف التحميل. هذا يوقف كل التحميلات والتثبيتات في الخلفية على ${p?.name ?: "الـPS4"}."))
-            Dim(tr("This download is then marked as stopped (failed_attempts = 5) and stays paused until you resume it. Your other downloads continue when you launch ezRemote on the PS4 again; the partial file is kept.",
-                "ثم يُعلَّم هذا التحميل كمتوقف (failed_attempts = 5) ويبقى متوقفًا حتى تستأنفه. تستمر تحميلاتك الأخرى عند تشغيل ezRemote مجددًا على الـPS4؛ والملف الجزئي يبقى."))
+            Text(tr("PS4 server only reads bg_download_history.json when it starts, so to pause it has to be stopped. That stops ALL background downloads and installs on ${p?.name ?: "the PS4"}.",
+                "خادم PS4 لا يقرأ bg_download_history.json إلا عند إقلاعه، لذلك يجب إيقافه ليتوقف التحميل. هذا يوقف كل التحميلات والتثبيتات في الخلفية على ${p?.name ?: "الـPS4"}."))
+            Dim(tr("This download is then marked as stopped (failed_attempts = 5) and stays paused until you resume it. Your other downloads continue when you launch PS4 server on the PS4 again; the partial file is kept.",
+                "ثم يُعلَّم هذا التحميل كمتوقف (failed_attempts = 5) ويبقى متوقفًا حتى تستأنفه. تستمر تحميلاتك الأخرى عند تشغيل PS4 server مجددًا على الـPS4؛ والملف الجزئي يبقى."))
         } },
         confirmButton = { TextButton(onClick = { Ops.launch(tr("Pausing…", "إيقاف مؤقت…")) { DownloadMonitor.pause(id) }; close() }) { Lbl(tr("Pause", "إيقاف مؤقت")) } },
         dismissButton = { TextButton(onClick = close) { Lbl(tr("Cancel", "إلغاء")) } })
 }
 
 @Composable fun ConfirmResume(id: String, close: () -> Unit) {
-    val v2 = Ps4Repo.get(DownloadRepo.get(id)?.ps4Id)?.let { EzServer.isV2Known(it) } == true
+    val v2 = Ps4Repo.get(DownloadRepo.get(id)?.ps4Id)?.let { Ps4Server.isV2Known(it) } == true
     AlertDialog(onDismissRequest = close, title = { Text(tr("Resume this download?", "استئناف هذا التحميل؟")) },
         text = { if (v2) Text(tr("The download continues from the partial file. Nothing needs to be restarted on the PS4.", "يكمل التحميل من الملف الجزئي. لا حاجة لإعادة تشغيل أي شيء على الـPS4.")) else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(tr("failed_attempts is set back to 1 in bg_download_history.json (ezRemote Server is stopped first if it is running).", "يُعاد failed_attempts إلى 1 في bg_download_history.json (يُوقف خادم ezRemote أولًا إن كان يعمل)."))
-            Dim(tr("Then launch ezRemote on the PS4 so the server reloads the list. The download continues from the partial file and this app picks it up automatically.", "ثم شغّل ezRemote على الـPS4 ليعيد الخادم تحميل القائمة. يكمل التحميل من الملف الجزئي ويلتقطه التطبيق تلقائيًا."))
+            Text(tr("failed_attempts is set back to 1 in bg_download_history.json (PS4 server is stopped first if it is running).", "يُعاد failed_attempts إلى 1 في bg_download_history.json (يُوقف خادم PS4 أولًا إن كان يعمل)."))
+            Dim(tr("Then launch PS4 server on the PS4 so the server reloads the list. The download continues from the partial file and this app picks it up automatically.", "ثم شغّل PS4 server على الـPS4 ليعيد الخادم تحميل القائمة. يكمل التحميل من الملف الجزئي ويلتقطه التطبيق تلقائيًا."))
         } },
         confirmButton = { TextButton(onClick = { Ops.launch(tr("Preparing resume…", "تجهيز الاستئناف…")) { DownloadMonitor.resume(id) }; close() }) { Lbl(tr("Resume", "استئناف")) } },
         dismissButton = { TextButton(onClick = close) { Lbl(tr("Cancel", "إلغاء")) } })
@@ -183,17 +183,17 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
 
 @Composable fun ConfirmDeleteDownloads(ids: List<String>, onDone: () -> Unit, close: () -> Unit) {
     val items = ids.mapNotNull { DownloadRepo.get(it) }
-    val v2 = items.firstOrNull()?.let { Ps4Repo.get(it.ps4Id) }?.let { EzServer.isV2Known(it) } == true
+    val v2 = items.firstOrNull()?.let { Ps4Repo.get(it.ps4Id) }?.let { Ps4Server.isV2Known(it) } == true
     var files by remember { mutableStateOf(items.any { it.state != DlState.COMPLETED }) }
     AlertDialog(onDismissRequest = close, title = { Text(tr("Delete ${ids.size} download(s)?", "حذف ${ids.size} تحميل؟")) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(if (files) tr("The download is cancelled (removed from ezRemote Server's list) and its file is deleted from the PS4. This cannot be undone.", "يُلغى التحميل (يُزال من قائمة خادم ezRemote) ويُحذف ملفه من الـPS4. لا يمكن التراجع.")
+            Text(if (files) tr("The download is cancelled (removed from PS4 server's list) and its file is deleted from the PS4. This cannot be undone.", "يُلغى التحميل (يُزال من قائمة خادم PS4) ويُحذف ملفه من الـPS4. لا يمكن التراجع.")
                  else tr("Removed from this list only. Files on the PS4 are kept.", "سيُحذف من هذه القائمة فقط. تبقى الملفات على الـPS4."))
             Row(Modifier.fillMaxWidth().clickable { files = !files }, verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(files, { files = it }); Text(tr("Also delete the file(s) from the PS4", "احذف الملف (الملفات) من الـPS4 أيضًا"), Modifier.weight(1f))
             }
-            if (!v2 && items.any { it.state.active }) Dim(tr("A running download is cancelled by stopping ezRemote Server (it has no per-download cancel) and removing its entry from bg_download_history.json. Your other downloads continue when you launch ezRemote again.",
-                "يُلغى التحميل الجاري بإيقاف خادم ezRemote (لا يملك إلغاءً لتحميل واحد) وإزالة إدخاله من bg_download_history.json. تستمر تحميلاتك الأخرى عند تشغيل ezRemote مجددًا."))
+            if (!v2 && items.any { it.state.active }) Dim(tr("A running download is cancelled by stopping PS4 server (it has no per-download cancel) and removing its entry from bg_download_history.json. Your other downloads continue when you launch PS4 server again.",
+                "يُلغى التحميل الجاري بإيقاف خادم PS4 (لا يملك إلغاءً لتحميل واحد) وإزالة إدخاله من bg_download_history.json. تستمر تحميلاتك الأخرى عند تشغيل PS4 server مجددًا."))
         } },
         confirmButton = { TextButton(onClick = {
             Ops.launch(tr("Deleting…", "جارٍ الحذف…")) { ids.map { DownloadMonitor.delete(it, files) }.joinToString("\n") }; onDone(); close()
@@ -253,7 +253,7 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
                     supportingText = { Text(tr("Must end with .pkg to appear in the PS4 package list", "يجب أن ينتهي بـ .pkg ليظهر في قائمة الحزم")) })
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (msg.isNotEmpty()) Text(msg, fontWeight = FontWeight.SemiBold)
-                Dim(tr("ezRemote Server saves to exactly this folder and file name, then renames from .tmp when finished. The size is read from ezRemote Server.", "يحفظ خادم ezRemote في هذا المجلد وبهذا الاسم تمامًا، ثم يعيد التسمية من .tmp عند الانتهاء. الحجم يُقرأ من خادم ezRemote."))
+                Dim(tr("PS4 server saves to exactly this folder and file name, then renames from .tmp when finished. The size is read from PS4 server.", "يحفظ خادم PS4 في هذا المجلد وبهذا الاسم تمامًا، ثم يعيد التسمية من .tmp عند الانتهاء. الحجم يُقرأ من خادم PS4."))
             }
         } },
         confirmButton = { TextButton(enabled = !busy && p != null && links.isNotEmpty(), onClick = {
@@ -268,7 +268,7 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
                     out.append(if (links.size > 1) "${i + 1}/${links.size}: " else "").append(resultText(r)).append('\n'); msg = out.toString()
                 }
                 busy = false
-                if (ok == links.size && ok > 0) { Toast.makeText(ctx, tr("Request accepted. Waiting for ezRemote Server…", "قُبل الطلب. بانتظار خادم ezRemote…"), Toast.LENGTH_LONG).show(); close(); onSent() }
+                if (ok == links.size && ok > 0) { Toast.makeText(ctx, tr("Request accepted. Waiting for PS4 server…", "قُبل الطلب. بانتظار خادم PS4…"), Toast.LENGTH_LONG).show(); close(); onSent() }
             }
         }) { Lbl(tr("Send", "إرسال")) } },
         dismissButton = { TextButton(enabled = !busy, onClick = close) { Lbl(tr("Close", "إغلاق")) } })

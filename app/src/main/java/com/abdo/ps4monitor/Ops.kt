@@ -8,9 +8,9 @@ import kotlinx.coroutines.flow.update
 import java.io.IOException
 
 /**
- * Operations ezRemote performs synchronously on the PS4 (delete, copy, move, extract, install, rename, new folder, pause/resume/delete of
+ * Operations PS4 server performs synchronously on the PS4 (delete, copy, move, extract, install, rename, new folder, pause/resume/delete of
  * downloads). They run in an app-level scope so they outlive the screen, keep the foreground service alive and report with a toast.
- * One at a time: ezRemote refuses most of these while another activity is in progress. Outcomes ezRemote does not report are verified by listing.
+ * One at a time: PS4 server refuses most of these while another activity is in progress. Outcomes PS4 server does not report are verified by listing.
  */
 object Ops {
     class Item(val path: String, val isDir: Boolean)
@@ -41,16 +41,16 @@ object Ops {
     private fun depth(path: String) = path.trim('/').split('/').filter { it.isNotEmpty() }.size
     private fun parent(path: String) = path.substringBeforeLast('/', "/").ifEmpty { "/" }
     private fun names(p: Ps4, dir: String): Set<String> = PkgInspector.browse(p, dir).map { it.name }.toSet()
-    private fun fail(r: EzRemote.OpResult) = Tx.t(r.message)
+    private fun fail(r: Ps4Api.OpResult) = Tx.t(r.message)
 
     /** True when [path] is not inside the PS4's download folder: probably not a file the user downloaded. */
     fun outside(p: Ps4, path: String): Boolean { val base = DownloadMonitor.norm(p.dest); return !(path == base || path.startsWith("$base/")) }
 
-    /** ezRemote remove (recursive) + verification by listing the parent folders. */
+    /** PS4 server remove (recursive) + verification by listing the parent folders. */
     suspend fun deleteItems(p: Ps4, items: List<Item>): String = withContext(Dispatchers.IO) {
         val paths = items.map { it.path }.distinct()
         if (paths.any { depth(it) < 2 }) return@withContext tr("Refusing to delete a top-level system folder.", "رفض حذف مجلد نظام رئيسي.")
-        val r = EzRemote.remove(p, paths)
+        val r = Ps4Api.remove(p, paths)
         val left = try { paths.groupBy { parent(it) }.flatMap { (dir, ps) -> val have = names(p, dir); ps.filter { it.substringAfterLast('/') in have } } } catch (e: Exception) { null }
         when {
             left == null -> if (r.ok) tr("Deleted ${paths.size} item(s) from the PS4.", "حُذف ${paths.size} عنصر من الـPS4.") else fail(r)
@@ -59,24 +59,24 @@ object Ops {
         }
     }
 
-    /** Installs through OUR server (no ezRemote Client needed): registers the package with the console's installer and follows its progress. */
+    /** Installs through OUR server (no PS4 server needed): registers the package with the console's installer and follows its progress. */
     suspend fun install(p: Ps4, paths: List<String>): String = withContext(Dispatchers.IO) {
-        val up = try { EzServer.isV2(p, 4000) } catch (e: Exception) { false }
+        val up = try { Ps4Server.isV2(p, 4000) } catch (e: Exception) { false }
         if (!up) return@withContext tr("Our server is not running on the PS4. Choose \"Our server\" on the Home screen first.", "سيرفرنا لا يعمل على الـPS4. اختر «سيرفرنا» من الصفحة الرئيسية أولًا.")
-        if (!EzServer.installSupported(p)) return@withContext tr("The running server is too old for installing. Send the newest one: Home screen -> server -> Our server.", "السيرفر العامل قديم للتثبيت. أرسل الأحدث: الصفحة الرئيسية ← السيرفر ← سيرفرنا.")
+        if (!Ps4Server.installSupported(p)) return@withContext tr("The running server is too old for installing. Send the newest one: Home screen -> server -> Our server.", "السيرفر العامل قديم للتثبيت. أرسل الأحدث: الصفحة الرئيسية ← السيرفر ← سيرفرنا.")
         val results = ArrayList<String>()
         for (path in paths) {
             val name = path.substringAfterLast('/')
-            if (!EzServer.fsUsable(p, path, write = false)) { results.add("$name: " + tr("not inside a folder the server may access.", "ليس داخل مجلد يسمح به السيرفر.")); continue }
+            if (!Ps4Server.fsUsable(p, path, write = false)) { results.add("$name: " + tr("not inside a folder the server may access.", "ليس داخل مجلد يسمح به السيرفر.")); continue }
             label.value = tr("Installing ", "جارٍ التثبيت ") + name
-            val st = try { EzServer.installPkg(p, path) }
-                catch (e: EzError) { results.add("$name: " + (e.message ?: "")); continue }
+            val st = try { Ps4Server.installPkg(p, path) }
+                catch (e: Ps4Error) { results.add("$name: " + (e.message ?: "")); continue }
                 catch (e: IOException) { results.add("$name: " + Tx.t(PkgInspector.friendly(e))); continue }
             var bad = 0; var last = ""
             val t0 = System.currentTimeMillis()
             while (System.currentTimeMillis() - t0 < 6 * 3600_000L) {
                 delay(1500)
-                val pr = try { EzServer.installStatus(p, st.taskId) } catch (e: CancellationException) { throw e } catch (e: Exception) { if (++bad >= 20) { last = tr("lost contact with the server", "انقطع الاتصال بالسيرفر"); break }; continue }
+                val pr = try { Ps4Server.installStatus(p, st.taskId) } catch (e: CancellationException) { throw e } catch (e: Exception) { if (++bad >= 20) { last = tr("lost contact with the server", "انقطع الاتصال بالسيرفر"); break }; continue }
                 bad = 0
                 if (pr.length > 0) label.value = tr("Installing ", "جارٍ التثبيت ") + name + "  " + (pr.transferred * 100 / pr.length) + "%"
                 if (pr.transferred > 0 && pr.errorResult != 0) { last = tr("the installer reported error ", "أبلغ المثبّت عن خطأ ") + "0x" + Integer.toHexString(pr.errorResult).uppercase(); break }
@@ -88,7 +88,7 @@ object Ops {
     }
 
     suspend fun mkdir(p: Ps4, path: String): String = withContext(Dispatchers.IO) {
-        val r = EzRemote.createFolder(p, path)
+        val r = Ps4Api.createFolder(p, path)
         if (!r.ok) return@withContext fail(r)
         if (path.substringAfterLast('/') in names(p, parent(path))) tr("Folder created.", "أُنشئ المجلد.") else tr("The PS4 did not create the folder.", "لم ينشئ الـPS4 المجلد.")
     }
@@ -98,7 +98,7 @@ object Ops {
         if (depth(from) < 2) return@withContext tr("Refusing to rename a top-level system folder.", "رفض إعادة تسمية مجلد نظام رئيسي.")
         val dir = parent(from)
         if (newName in names(p, dir)) return@withContext tr("An item named $newName already exists.", "يوجد عنصر باسم $newName بالفعل.")
-        EzRemote.rename(p, from, joinPath(dir, newName))
+        Ps4Api.rename(p, from, joinPath(dir, newName))
         val after = names(p, dir)
         if (newName in after && from.substringAfterLast('/') !in after) tr("Renamed to $newName.", "أُعيدت التسمية إلى $newName.") else tr("The PS4 did not rename it.", "لم يُعد الـPS4 تسميته.")
     }
@@ -111,20 +111,20 @@ object Ops {
             if (e.isDir && (destDir == src || destDir.startsWith("$src/"))) return@withContext tr("A folder cannot be copied or moved into itself.", "لا يمكن نسخ أو نقل مجلد إلى داخله.")
             if (dir == destDir) return@withContext tr("The destination is the same folder.", "الوجهة هي نفس المجلد.")
         }
-        val r = if (move) EzRemote.move(p, paths, destDir) else EzRemote.copy(p, paths, destDir)
+        val r = if (move) Ps4Api.move(p, paths, destDir) else Ps4Api.copy(p, paths, destDir)
         val have = try { names(p, destDir) } catch (e: Exception) { emptySet() }
         val missing = items.filter { it.second.name !in have }
         when {
             missing.isEmpty() && r.ok -> tr(if (move) "Moved ${items.size} item(s)." else "Copied ${items.size} item(s).", if (move) "نُقل ${items.size} عنصر." else "نُسخ ${items.size} عنصر.")
-            missing.isEmpty() -> tr("Done, but ezRemote reported: ", "تم، لكن ezRemote أبلغ: ") + fail(r)
+            missing.isEmpty() -> tr("Done, but PS4 server reported: ", "تم، لكن PS4 server أبلغ: ") + fail(r)
             else -> tr("Not everything arrived: ${missing.joinToString { it.second.name }}. ", "لم يصل كل شيء: ${missing.joinToString { it.second.name }}. ") + (if (r.ok) "" else fail(r))
         }
     }
 
     suspend fun extract(p: Ps4, archive: String): String = withContext(Dispatchers.IO) {
         val dir = parent(archive); val name = archive.substringAfterLast('/'); val folder = name.substringBeforeLast('.', name).ifBlank { name + "_extracted" }
-        val r = EzRemote.extract(p, archive, dir, folder)
+        val r = Ps4Api.extract(p, archive, dir, folder)
         if (!r.ok) return@withContext fail(r)
-        if (folder in names(p, dir)) tr("Extracted into the folder $folder.", "فُكّ الضغط في المجلد $folder.") else tr("ezRemote reported success but the folder was not found.", "أبلغ ezRemote بالنجاح لكن لم يوجد المجلد.")
+        if (folder in names(p, dir)) tr("Extracted into the folder $folder.", "فُكّ الضغط في المجلد $folder.") else tr("PS4 server reported success but the folder was not found.", "أبلغ PS4 server بالنجاح لكن لم يوجد المجلد.")
     }
 }

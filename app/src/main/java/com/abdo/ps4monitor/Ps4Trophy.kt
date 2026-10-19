@@ -13,10 +13,10 @@ object Ps4Trophy {
 
     fun probe(ps4: Ps4, cache: File): List<String> {
         val out = ArrayList<String>()
-        EzServer.setRoExtra(ps4, EzServer.roExtra().joinToString("\n"))      // re-sends the read-only folders (now including the account folders)
+        Ps4Server.setRoExtra(ps4, Ps4Server.roExtra().joinToString("\n"))      // re-sends the read-only folders (now including the account folders)
         fun add(s: String) { if (out.size < 400) out.add(s) }
         fun walk(path: String, depth: Int) {
-            val l = try { EzServer.fsList(ps4, path, 8000) } catch (e: Exception) { add("$path: ${e.message}"); return }
+            val l = try { Ps4Server.fsList(ps4, path, 8000) } catch (e: Exception) { add("$path: ${e.message}"); return }
             for (e in l.take(60)) {
                 val p = "$path/${e.name}"
                 if (e.isDir) { add("[dir] $p"); if (depth < 4) walk(p, depth + 1) }
@@ -28,14 +28,14 @@ object Ps4Trophy {
         }
         for (t in THEME_ROOTS) { add("== theme folder $t"); walk(t, 2) }
         for (h in HOMES) {
-            val ids = try { EzServer.fsList(ps4, h, 8000) } catch (e: Exception) { add("$h: ${e.message}"); continue }
+            val ids = try { Ps4Server.fsList(ps4, h, 8000) } catch (e: Exception) { add("$h: ${e.message}"); continue }
             add("== $h: " + ids.joinToString { it.name })
             for (u in ids.filter { it.isDir }.take(12)) {
                 val base = "$h/${u.name}"
-                val l = try { EzServer.fsList(ps4, base, 8000) } catch (e: Exception) { add("$base: ${e.message}"); continue }
+                val l = try { Ps4Server.fsList(ps4, base, 8000) } catch (e: Exception) { add("$base: ${e.message}"); continue }
                 add("-- $base: " + l.joinToString { it.name })
                 l.firstOrNull { it.name == "username.dat" }?.let { n ->
-                    runCatching { add("   name: " + String(EzServer.fsRead(ps4, "$base/${n.name}", 0, 64, 5000), Charsets.UTF_8).trim { c -> c == '\u0000' || c.isWhitespace() }) }
+                    runCatching { add("   name: " + String(Ps4Server.fsRead(ps4, "$base/${n.name}", 0, 64, 5000), Charsets.UTF_8).trim { c -> c == '\u0000' || c.isWhitespace() }) }
                 }
                 l.filter { it.isDir && (it.name.contains("troph", true) || it.name.contains("theme", true)) }.forEach { walk("$base/${it.name}", 1) }
             }
@@ -46,7 +46,7 @@ object Ps4Trophy {
     private fun dumpDb(ps4: Ps4, path: String, size: Long, cache: File, add: (String) -> Unit) {
         val f = File(cache, "probe.db")
         try {
-            f.outputStream().use { EzServer.fsCopyTo(ps4, path, size, it) { } }
+            f.outputStream().use { Ps4Server.fsCopyTo(ps4, path, size, it) { } }
             val db = SQLiteDatabase.openDatabase(f.path, null, SQLiteDatabase.OPEN_READONLY)
             try {
                 val tables = ArrayList<String>()

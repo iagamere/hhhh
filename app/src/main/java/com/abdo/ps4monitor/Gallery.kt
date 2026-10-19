@@ -127,7 +127,7 @@ object CaptureSaver {
     @Suppress("DEPRECATION")
     private fun saveOne(ps4: Ps4, c: Capture, progress: (Float) -> Unit): Uri {
         val cr = app.contentResolver
-        val size = if (c.size > 0) c.size else EzServer.fsSize(ps4, c.path, 6000)
+        val size = if (c.size > 0) c.size else Ps4Server.fsSize(ps4, c.path, 6000)
         if (size <= 0) throw IOException(tr("The file is empty or could not be read.", "الملف فارغ أو تعذّرت قراءته."))
         val mime = mimeOf(c.name, c.video)
         val name = displayName(c)
@@ -153,7 +153,7 @@ object CaptureSaver {
         val uri = cr.insert(collection, values) ?: throw IOException(tr("The phone refused to create the file.", "رفض الهاتف إنشاء الملف."))
         try {
             val os = cr.openOutputStream(uri) ?: throw IOException(tr("Could not open the destination file.", "تعذّر فتح ملف الوجهة."))
-            os.use { EzServer.fsCopyTo(ps4, c.path, size, it) { d -> progress((d.toDouble() / size).toFloat().coerceIn(0f, 1f)) } }
+            os.use { Ps4Server.fsCopyTo(ps4, c.path, size, it) { d -> progress((d.toDouble() / size).toFloat().coerceIn(0f, 1f)) } }
             if (Build.VERSION.SDK_INT >= 29) {
                 val v = ContentValues(); v.put(MediaStore.MediaColumns.IS_PENDING, 0); cr.update(uri, v, null, null)
             } else if (legacyPath != null) MediaScannerConnection.scanFile(app, arrayOf(legacyPath), arrayOf(mime), null)

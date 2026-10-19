@@ -29,7 +29,7 @@ internal fun whyText(w: DeletePolicy.Why): String = when (w) {
     DeletePolicy.Why.SAVES -> tr("Saved games: protected.", "الحفظ (Save): محمي.")
     DeletePolicy.Why.TROPHIES -> tr("Trophy data: protected.", "بيانات الإنجازات: محمية.")
     DeletePolicy.Why.ACCOUNTS -> tr("Accounts and profiles: protected.", "الحسابات والملفات الشخصية: محمية.")
-    DeletePolicy.Why.LOADER -> tr("GoldHEN / payloads / ezRemote files: protected.", "ملفات GoldHEN والـpayloads وezRemote: محمية.")
+    DeletePolicy.Why.LOADER -> tr("GoldHEN / payloads / PS4 server files: protected.", "ملفات GoldHEN والـpayloads وPS4 server: محمية.")
     DeletePolicy.Why.SYSTEM_FILE -> tr("Game or system file (eboot, sce_sys, modules, saves): protected.", "ملف لعبة أو نظام (eboot وsce_sys والوحدات والحفظ): محمي.")
     DeletePolicy.Why.OUTSIDE_ZONES -> tr("Outside the places this app may delete from (download folder, captures, USB drives).", "خارج الأماكن التي يسمح التطبيق بالحذف منها (مجلد التحميل واللقطات ومحركات USB).")
     DeletePolicy.Why.SWITCHED_OFF -> tr("Deleting is switched off: turn it on above (Storage > Deleting).", "الحذف معطّل: فعّله بالأعلى (التخزين ← الحذف).")
@@ -63,16 +63,16 @@ private fun join(dir: String, name: String) = if (dir.endsWith("/")) dir + name 
 
     LaunchedEffect(ps4.id, reload) {
         places = withContext(Dispatchers.IO) {
-            runCatching { EzServer.isV2(ps4, 4000) }
-            (EzServer.fsRootsKnown(ps4) + EzServer.roRoots(ps4)).distinct().sorted()
+            runCatching { Ps4Server.isV2(ps4, 4000) }
+            (Ps4Server.fsRootsKnown(ps4) + Ps4Server.roRoots(ps4)).distinct().sorted()
         }
     }
     LaunchedEffect(path, reload) {
         val p = path ?: return@LaunchedEffect
         entries = null; error = null
-        try { entries = withContext(Dispatchers.IO) { EzServer.fsList(ps4, p, 20_000) }.sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() })) }
-        catch (e: EzError) { error = e.message ?: "error" }
-        catch (e: Exception) { error = EzRemote.friendly(e) }
+        try { entries = withContext(Dispatchers.IO) { Ps4Server.fsList(ps4, p, 20_000) }.sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() })) }
+        catch (e: Ps4Error) { error = e.message ?: "error" }
+        catch (e: Exception) { error = Ps4Api.friendly(e) }
     }
     fun goUp() {
         val p = path
@@ -197,7 +197,7 @@ private fun join(dir: String, name: String) = if (dir.endsWith("/")) dir + name 
         }
         Dim(tr("Off by default. When on, you can delete only: files in the download folder, captures, files on USB drives, and installed games (Games tab, two confirmations).",
             "معطّل افتراضيًا. عند تفعيله يمكنك حذف: ملفات مجلد التحميل، واللقطات، وملفات محركات USB، والألعاب المثبتة (تبويب الألعاب، بتأكيدين) فقط."))
-        Dim(tr("Never deleted, whatever you tap: system files, accounts, saved games, trophies, GoldHEN / payloads / ezRemote files, game executables and modules, and top-level folders. Saves and trophies also survive deleting a game.",
-            "لا يُحذف أبدًا مهما ضغطت: ملفات النظام والحسابات والحفظ (Save) والإنجازات وملفات GoldHEN والـpayloads وezRemote وملفات تشغيل الألعاب والوحدات والمجلدات الرئيسية. والحفظ والإنجازات تبقى حتى بعد حذف لعبة."))
+        Dim(tr("Never deleted, whatever you tap: system files, accounts, saved games, trophies, GoldHEN / payloads / PS4 server files, game executables and modules, and top-level folders. Saves and trophies also survive deleting a game.",
+            "لا يُحذف أبدًا مهما ضغطت: ملفات النظام والحسابات والحفظ (Save) والإنجازات وملفات GoldHEN والـpayloads وPS4 server وملفات تشغيل الألعاب والوحدات والمجلدات الرئيسية. والحفظ والإنجازات تبقى حتى بعد حذف لعبة."))
     }
 }

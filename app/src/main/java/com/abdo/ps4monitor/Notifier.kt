@@ -182,9 +182,9 @@ object Notifier {
     private fun alertNotification(d: Download, trouble: Long): Notification {
         val mins = (trouble / 60_000L).coerceAtLeast(1L)
         val why = if (d.state == DlState.SERVER_DOWN && DownloadMonitor.status.value[d.ps4Id]?.power == Power.REST)
-            tr("The PS4 is in rest mode and ezRemote Server is not answering. Wake the PS4 from the app.", "الـPS4 في وضع الراحة وخادم ezRemote لا يستجيب. أيقظ الـPS4 من التطبيق.")
+            tr("The PS4 is in rest mode and PS4 server is not answering. Wake the PS4 from the app.", "الـPS4 في وضع الراحة وخادم PS4 لا يستجيب. أيقظ الـPS4 من التطبيق.")
         else if (d.state == DlState.SERVER_DOWN)
-            tr("ezRemote Server on the PS4 is not answering (the PS4 may be asleep, or the server stopped).", "خادم ezRemote على الـPS4 لا يستجيب (قد يكون الجهاز في وضع الراحة أو توقف الخادم).")
+            tr("PS4 server on the PS4 is not answering (the PS4 may be asleep, or the server stopped).", "خادم PS4 على الـPS4 لا يستجيب (قد يكون الجهاز في وضع الراحة أو توقف الخادم).")
         else tr("No download progress is being made.", "لا يوجد تقدّم في التحميل.")
         val at = listOfNotNull(d.pct?.let { "$it%" }, if (d.currentSize > 0) Fmt.gb(d.currentSize) else null).joinToString(" • ")
         val body = why + "\n" + tr("Interrupted for $mins min", "منقطع منذ $mins د") + (if (at.isNotEmpty()) " • $at" else "") + "\n" + tr("Tap to open the app.", "اضغط لفتح التطبيق.")
@@ -213,7 +213,7 @@ object Notifier {
         val body = when {
             ok -> listOfNotNull(Fmt.gb(d.currentSize), if (secs > 0) tr("in ${Fmt.dur(secs)}", "خلال ${Fmt.dur(secs)}") else null, tr("verified", "تم التحقق")).joinToString(" • ")
             d.state == DlState.FAILED -> Tx.t(d.errorMessage ?: tr("Unknown reason", "سبب غير معروف"))
-            else -> tr("ezRemote accepted the request but no download activity was detected.", "قبل ezRemote الطلب لكن لم يُكتشف أي نشاط تحميل.")
+            else -> tr("PS4 server accepted the request but no download activity was detected.", "قبل PS4 server الطلب لكن لم يُكتشف أي نشاط تحميل.")
         }
         val b = NotificationCompat.Builder(ctx, "done").setSmallIcon(R.drawable.ic_stat_ps4).setGroup("ps4_done")
             .setContentTitle(gameTitle(d)).setContentText("$head • $body").setSubText(psName(d).ifEmpty { null })

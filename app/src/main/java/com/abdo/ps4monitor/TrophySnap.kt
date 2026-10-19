@@ -20,10 +20,10 @@ object TrophySnap {
 
     fun take(ps4: Ps4): Snap {
         val items = ArrayList<Item>(); val notes = ArrayList<String>()
-        EzServer.setRoExtra(ps4, EzServer.roExtra().joinToString("\n"))   // makes sure the account folders are readable
+        Ps4Server.setRoExtra(ps4, Ps4Server.roExtra().joinToString("\n"))   // makes sure the account folders are readable
         fun walk(path: String, depth: Int) {
             if (items.size >= MAX_ENTRIES) { if (notes.none { it.startsWith("Stopped") }) notes.add("Stopped at $MAX_ENTRIES entries."); return }
-            val l = try { EzServer.fsList(ps4, path, 8000) } catch (e: Exception) { notes.add("$path: ${e.message}"); return }
+            val l = try { Ps4Server.fsList(ps4, path, 8000) } catch (e: Exception) { notes.add("$path: ${e.message}"); return }
             if (l.size > PER_DIR) notes.add("$path has ${l.size} entries; only the first $PER_DIR were recorded.")
             for (e in l.take(PER_DIR)) {
                 val p = "$path/${e.name}"
@@ -31,7 +31,7 @@ object TrophySnap {
                 if (e.isDir && depth < 4) walk(p, depth + 1)
             }
         }
-        val homes = try { EzServer.fsList(ps4, "/user/home", 8000) } catch (e: Exception) { notes.add("/user/home: ${e.message}"); emptyList() }
+        val homes = try { Ps4Server.fsList(ps4, "/user/home", 8000) } catch (e: Exception) { notes.add("/user/home: ${e.message}"); emptyList() }
         for (u in homes.filter { it.isDir }.take(16)) walk("/user/home/${u.name}/trophy", 1)
         walk("/user/trophy", 1)
         val s = Snap(System.currentTimeMillis(), items, notes)
