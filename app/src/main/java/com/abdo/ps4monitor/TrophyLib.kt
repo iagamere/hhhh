@@ -18,7 +18,7 @@ class TrophyState(val unlocked: Map<Int, Long>?, val notes: List<String>, val db
 /** One game's summary row of the console's trophy database (tbl_trophy_title). [counts]: grade -> (earned, total). */
 class DbTitle(val dbId: Int, val npwr: String, val title: String, val progress: Int, val total: Int, val unlockedNum: Int, val counts: Map<Char, Pair<Int, Int>>)
 /** One trophy row of tbl_trophy_flag (names and descriptions are stored in the database itself). */
-class DbTrophy(val id: Int, val group: Int, val name: String, val detail: String, val grade: Char, val unlocked: Boolean, val visible: Boolean, val time: Long)
+class DbTrophy(val id: Int, val group: Int, val name: String, val detail: String, val grade: Char, val unlocked: Boolean, val visible: Boolean, val time: Long, val icon: String = "")
 class AccountDb(val title: DbTitle, val trophies: List<DbTrophy>)
 
 /**
@@ -179,6 +179,7 @@ object TrophyLib {
 
     private fun Cursor.int(n: String): Int { val k = getColumnIndex(n); return if (k < 0 || isNull(k)) 0 else try { getInt(k) } catch (e: Exception) { 0 } }
     private fun Cursor.str(n: String): String { val k = getColumnIndex(n); return if (k < 0 || isNull(k)) "" else try { getString(k) ?: "" } catch (e: Exception) { "" } }
+    private fun Cursor.lng(n: String): Long { val k = getColumnIndex(n); return if (k < 0 || isNull(k)) 0L else try { getLong(k) } catch (e: Exception) { 0L } }
     private fun gradeOf(v: Int): Char = when (v) { 1 -> 'P'; 2 -> 'G'; 3 -> 'S'; 4 -> 'B'; else -> '?' }
     /** tbl_trophy_flag.time_unlocked is text like 2024-05-01T12:30:00.00Z (an unlocked-never placeholder is an old date); a number is also accepted. */
     private fun parseTime(s: String): Long {
@@ -201,6 +202,60 @@ object TrophyLib {
      *   tbl_trophy_flag(title_id = tbl_trophy_title.id, trophyid, groupid, title, description, grade 1..4 = P/G/S/B, unlocked, visible, time_unlocked)
      * Not verified here on a console: that the read-only folders let the server hand over this file, and that the file is not mid-write.
      */
+    private fun hasTable(db: SQLiteDatabase, n: String) = db.rawQuery("select count(*) from sqlite_master where type='table' and name=?", arrayOf(n)).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
+
+    /**
+     * trophy_net.db layout (seen in a real console's schema dump, not from documentation):
+     *   titles(id, npcommid = NPWR id, trophy_num, platinum_num..bronze_num, title, ...), trophies(id, title_id, group_id, trophyid, grade, hidden, title, description, rare, earned_rate, small_icon_url, icon_url),
+     *   user_title_map(user_id, title_id, progress, unlocked_trophy_num, unlocked_*_num, ...), user_trophy_map(user_id, trophy_id, time_unlocked).
+     * It only holds games whose trophies were synced with PSN. The meaning of the grade numbers is not documented, so it is derived from the title's own per-grade counts.
+     * Returns null when this database has no such tables, or has no entry for the game ([notes] says which).
+     */
+    private fun readNet(db: SQLiteDatabase, account: Account, npwr: String, gameTitle: String, notes: MutableList<String>, opened: BooleanArray): AccountDb? {
+        if (!hasTable(db, "titles") || !hasTable(db, "trophies") || !hasTable(db, "user_title_map") || !hasTable(db, "user_trophy_map")) return null
+        opened[0] = true
+        class T(val id: Int, val npwr: String, val title: String, val total: Int, val pn: Int, val gn: Int, val sn: Int, val bn: Int)
+        val titles = ArrayList<T>()
+        db.rawQuery("select * from titles", null).use { c ->
+            while (c.moveToNext()) titles += T(c.int("id"), c.str("npcommid"), c.str("title"), c.int("trophy_num"), c.int("platinum_num"), c.int("gold_num"), c.int("silver_num"), c.int("bronze_num"))
+        }
+        if (titles.isEmpty()) { notes += "${account.name}: trophy_net.db has no games (nothing synced yet)"; return null }
+        val key = npwr.substringBefore('_'); val want = norm(gameTitle)
+        val pick = titles.firstOrNull { npwr.isNotEmpty() && it.npwr.equals(npwr, true) }
+            ?: titles.firstOrNull { key.isNotEmpty() && it.npwr.startsWith(key, true) }
+            ?: titles.firstOrNull { want.isNotEmpty() && norm(it.title) == want }
+            ?: titles.filter { want.isNotEmpty() && norm(it.title).let { x -> x.isNotEmpty() && (x.contains(want) || want.contains(x)) } }.minByOrNull { Math.abs(norm(it.title).length - want.length) }
+        if (pick == null) { notes += "${account.name}: this game is not in trophy_net.db (${titles.size} synced games: " + titles.take(6).joinToString { it.title } + ")"; return null }
+        class Row(val id: Int, val group: Int, val tid: Int, val grade: Int, val hidden: Boolean, val name: String, val detail: String, val icon: String)
+        val rows = ArrayList<Row>()
+        db.rawQuery("select * from trophies where title_id = ? order by trophyid", arrayOf(pick.id.toString())).use { c ->
+            while (c.moveToNext()) rows += Row(c.int("id"), c.int("group_id"), c.int("trophyid"), c.int("grade"), c.int("hidden") != 0, c.str("title"), c.str("description"), c.str("icon_url").ifBlank { c.str("small_icon_url") })
+        }
+        if (rows.isEmpty()) { notes += "${account.name}: ${pick.title} is in trophy_net.db but has no trophy rows"; return null }
+        // which console user: the one with the most progress on this game (a database can list more than one user)
+        data class Um(val user: Long, val progress: Int, val unlocked: Int)
+        val ums = ArrayList<Um>()
+        db.rawQuery("select * from user_title_map where title_id = ?", arrayOf(pick.id.toString())).use { c ->
+            while (c.moveToNext()) ums += Um(c.lng("user_id"), c.int("progress"), c.int("unlocked_trophy_num"))
+        }
+        val um = ums.maxByOrNull { it.unlocked }
+        val times = HashMap<Int, Long>()      // trophy row id -> unlock time (seconds)
+        if (um != null) db.rawQuery("select * from user_trophy_map where user_id = ?", arrayOf(um.user.toString())).use { c -> while (c.moveToNext()) { val raw = c.str("time_unlocked"); if (raw.isNotBlank()) times[c.int("trophy_id")] = parseTime(raw) } }
+        // grade numbers -> P/G/S/B by comparing with the title's own counts; the first candidate mapping that reproduces them exactly wins
+        val dist = rows.groupingBy { it.grade }.eachCount()
+        val want4 = mapOf('P' to pick.pn, 'G' to pick.gn, 'S' to pick.sn, 'B' to pick.bn)
+        val maps = listOf(mapOf(1 to 'P', 2 to 'G', 3 to 'S', 4 to 'B'), mapOf(0 to 'P', 1 to 'G', 2 to 'S', 3 to 'B'), mapOf(4 to 'P', 3 to 'G', 2 to 'S', 1 to 'B'), mapOf(3 to 'P', 2 to 'G', 1 to 'S', 0 to 'B'))
+        val gm = maps.firstOrNull { m -> want4.values.sum() > 0 && want4.all { (ch, n) -> m.entries.filter { it.value == ch }.sumOf { dist[it.key] ?: 0 } == n } && dist.keys.all { it in m } }
+        if (gm == null) notes += "grade numbers ${dist} do not match the title's counts (P${pick.pn} G${pick.gn} S${pick.sn} B${pick.bn}): grades are not shown"
+        val list = rows.map { r -> DbTrophy(r.tid, r.group, r.name, r.detail, gm?.get(r.grade) ?: '?', times.containsKey(r.id), !r.hidden, times[r.id] ?: 0L, r.icon) }
+        val earned = list.count { it.unlocked }
+        val pr = um?.progress?.takeIf { it in 0..100 } ?: if (pick.total > 0) earned * 100 / pick.total else 0
+        val counts = LinkedHashMap<Char, Pair<Int, Int>>()
+        for ((ch, tot) in want4) if (tot > 0) counts[ch] = list.count { it.grade == ch && it.unlocked } to tot
+        notes += "${account.name}: read ${pick.title} from trophy_net.db (PSN-synced copy; users in table: ${ums.size}, trophies ${list.size}, earned $earned)"
+        return AccountDb(DbTitle(pick.id, pick.npwr, pick.title, pr, if (pick.total > 0) pick.total else list.size, earned, counts), list)
+    }
+
     /** Tables, columns and row counts of a database file, for the technical notes (so an unknown layout can be seen instead of guessed). */
     private fun schemaOf(db: SQLiteDatabase, name: String): String {
         val sb = StringBuilder("$name: ")
@@ -241,7 +296,13 @@ object TrophyLib {
                 val db = try { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READONLY) } catch (e: Exception) { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READWRITE) }
                 try {
                     val has = db.rawQuery("select count(*) from sqlite_master where type='table' and name='tbl_trophy_title'", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
-                    if (!has) { notes += schemaOf(db, main.name) + " (${main.size} B)"; continue }
+                    if (!has) {
+                        // the console also keeps a PSN-synced copy (trophy_net.db: titles / trophies / user_title_map / user_trophy_map); the layout was read from a real console's notes
+                        val net = readNet(db, account, npwr, gameTitle, notes, opened)
+                        if (net != null) return net
+                        if (!opened[0]) notes += schemaOf(db, main.name) + " (${main.size} B)"
+                        continue
+                    }
                     opened[0] = true
                     val titles = ArrayList<Pair<DbTitle, Int>>()
                     db.rawQuery("select * from tbl_trophy_title", null).use { c ->

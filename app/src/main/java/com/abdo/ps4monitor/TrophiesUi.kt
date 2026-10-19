@@ -38,6 +38,19 @@ private val PLAT = Color(0xFF7FB2E5); private val GOLD = Color(0xFFE2B33C); priv
 private fun gradeColor(g: Char) = when (g) { 'P' -> PLAT; 'G' -> GOLD; 'S' -> SILV; 'B' -> BRON; else -> Color(0xFF8A8F98) }
 private fun gradeName(g: Char) = when (g) { 'P' -> tr("Platinum", "بلاتينية"); 'G' -> tr("Gold", "ذهبية"); 'S' -> tr("Silver", "فضية"); 'B' -> tr("Bronze", "برونزية"); else -> tr("Trophy", "كأس") }
 
+/** Trophy pictures that the console only stores as web addresses (trophy_net.db icon_url): downloaded by the phone and kept in memory. */
+private object UrlIcons {
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+    fun peek(u: String?): Bitmap? = if (u == null) null else cache[u]
+    suspend fun load(u: String): Bitmap? = withContext(Dispatchers.IO) {
+        cache[u] ?: try {
+            val c = java.net.URL(if (u.startsWith("http://")) "https://" + u.removePrefix("http://") else u).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 8000; c.readTimeout = 8000
+            try { if (c.responseCode == 200) Thumbs.decode(c.inputStream.use { it.readBytes() }, 160)?.also { cache[u] = it } else null } finally { c.disconnect() }
+        } catch (e: Exception) { null }
+    }
+}
+
 private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val npwrs: List<String>, val notes: List<String>)
 
 /** Ring with the progress of one account around its picture (PS4 style circles). */
@@ -65,7 +78,9 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
 
 @Composable private fun TrophyRow(ps4: Ps4, pack: TrophyPack?, t: Trophy, earnedAt: Long?, known: Boolean) {
     val got = earnedAt != null
-    val icon by produceState<Bitmap?>(null, t.id, pack?.trpPath) {
+    val icon by produceState<Bitmap?>(UrlIcons.peek(t.icon), t.id, t.icon, pack?.trpPath) {
+        value = UrlIcons.peek(t.icon)
+        if (t.icon != null && t.icon.startsWith("http")) { if (value == null) value = UrlIcons.load(t.icon); return@produceState }
         val e = t.icon?.let { pack?.files?.get(it) }
         if (pack != null && e != null && e.second in 1..(2L shl 20)) value = withContext(Dispatchers.IO) { runCatching { Thumbs.decode(EzServer.fsRead(ps4, pack.trpPath, e.first, e.second.toInt(), 15000), 160) }.getOrNull() }
     }
@@ -115,7 +130,7 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
     val loaded = d.accounts.all { it.id in states }
     // the trophy list: the console's own database has the real names (the .trp pack may be encrypted); the pack supplies the pictures
     val dbAny = states.values.firstNotNullOfOrNull { it.db }
-    val trophies: List<Trophy>? = dbAny?.trophies?.map { x -> Trophy(x.id, x.name.ifBlank { "Trophy %03d".format(x.id) }, x.detail, x.grade, !x.visible, pack?.trophies?.firstOrNull { it.id == x.id }?.icon) } ?: pack?.trophies
+    val trophies: List<Trophy>? = dbAny?.trophies?.map { x -> Trophy(x.id, x.name.ifBlank { "Trophy %03d".format(x.id) }, x.detail, x.grade, !x.visible, pack?.trophies?.firstOrNull { it.id == x.id }?.icon ?: x.icon.ifBlank { null }) } ?: pack?.trophies
     val readable = dbAny != null || pack?.namesReadable == true
     if (trophies == null) {
         if (!loaded) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Dim(tr("Reading trophies…", "جارٍ قراءة الإنجازات…")) }; return }
@@ -179,9 +194,9 @@ private class TrophyData(val accounts: List<Account>, val pack: TrophyPack?, val
             }
             if (u != null) {
                 val missing = trophies.filter { u[it.id] == null }
-                if (earned.isNotEmpty()) { SectionTitle(tr("Earned", "المحققة") + " (${earned.size})"); earned.sortedByDescending { u[it.id] ?: 0L }.forEach { TrophyRow(ps4, pack, it, u[it.id], true) } }
-                if (missing.isNotEmpty()) { SectionTitle(tr("Not earned yet", "غير محققة") + " (${missing.size})"); missing.forEach { TrophyRow(ps4, pack, it, null, true) } }
-            } else trophies.forEach { TrophyRow(ps4, pack, it, null, false) }
+                if (earned.isNotEmpty()) { SectionTitle(tr("Earned", "المحققة") + " (${earned.size})"); earned.sortedByDescending { u[it.id] ?: 0L }.forEach { key(it.id) { TrophyRow(ps4, pack, it, u[it.id], true) } } }
+                if (missing.isNotEmpty()) { SectionTitle(tr("Not earned yet", "غير محققة") + " (${missing.size})"); missing.forEach { key(it.id) { TrophyRow(ps4, pack, it, null, true) } } }
+            } else trophies.forEach { key(it.id) { TrophyRow(ps4, pack, it, null, false) } }
             if (st.unlocked == null) {
                 val clip = androidx.compose.ui.platform.LocalClipboardManager.current
                 NoteList(st.notes + tr("Device tab > Scan trophies: send the result so the reader can be matched to this console.", "تبويب الجهاز > فحص الإنجازات: أرسل النتيجة ليُضبط القارئ على هذا الجهاز."))

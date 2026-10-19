@@ -1,3 +1,11 @@
+# PS4 Download Monitor 5.7.3
+
+## 5.7.3 trophies from trophy_net.db
+- Your notes showed the real layout of `/user/home/<id>/trophy/db/trophy_net.db` (titles, trophies, users, user_title_map, user_trophy_map). The trophy screen now reads it: names, descriptions, hidden flags, earned marks with time, the progress % and per-grade counts of the account, and the trophy pictures (the file only holds web addresses, so the PHONE downloads them from the internet).
+- This file is the copy synced with PSN: a game or an account that never synced its trophies is simply not in it (one of your accounts has 0 games, one has 1, one has 9). The unsynced local trophies live in encrypted `trophy/data/<title>/trophy.img` + `sealedkey`, which this app does not read.
+- Grade numbers (platinum/gold/silver/bronze) are not documented: they are worked out by matching the game's own counts; if no mapping matches, grades are hidden and the note says so. When a database lists more than one user, the user with the most progress on that game is shown.
+- NOT compiled, not verified on a console.
+
 # PS4 Download Monitor 5.7.2
 
 ## 5.7.2 (goes with ezRemote Server 2.0.0-abdo13): trophy diagnostics
