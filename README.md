@@ -1,3 +1,10 @@
+# PS4 Download Monitor 5.7.2
+
+## 5.7.2 (goes with ezRemote Server 2.0.0-abdo13): trophy diagnostics
+- Your log showed that `/user/home/<id>/trophy/db` holds only `trophy_net.db` on your console (no `trophy_local.db`). The reader now opens EVERY .db in that folder, uses the one that has the Apollo trophy tables, and otherwise writes each file's real tables, columns and row counts into the technical notes, plus the listing of the account's `trophy` folder. Nothing is guessed about `trophy_net.db`: its layout is unknown until the notes are seen.
+- Server abdo13: /v2 errors keep their JSON text (the generic error page was replacing it, which is why you only saw "Unexpected reply (HTTP 400)") and an unreadable path now reports the real reason. Choose "Our server" once on the Home screen to send abdo13.
+- NOT compiled. Not verified on a console.
+
 # PS4 Download Monitor 5.7.1
 
 ## 5.7.1 trophies read from the console's own database

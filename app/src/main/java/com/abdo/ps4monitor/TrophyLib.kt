@@ -201,54 +201,76 @@ object TrophyLib {
      *   tbl_trophy_flag(title_id = tbl_trophy_title.id, trophyid, groupid, title, description, grade 1..4 = P/G/S/B, unlocked, visible, time_unlocked)
      * Not verified here on a console: that the read-only folders let the server hand over this file, and that the file is not mid-write.
      */
-    /** [opened] is set once the database itself was read, so "this account has no record of the game" can be told from "the file could not be read". */
+    /** Tables, columns and row counts of a database file, for the technical notes (so an unknown layout can be seen instead of guessed). */
+    private fun schemaOf(db: SQLiteDatabase, name: String): String {
+        val sb = StringBuilder("$name: ")
+        try {
+            val tables = ArrayList<String>()
+            db.rawQuery("select name from sqlite_master where type='table'", null).use { c -> while (c.moveToNext()) tables.add(c.getString(0)) }
+            if (tables.isEmpty()) sb.append("no tables")
+            for (t in tables.take(30)) {
+                val n = db.rawQuery("select count(*) from \"$t\"", null).use { c -> if (c.moveToFirst()) c.getLong(0) else -1 }
+                val cols = db.rawQuery("select * from \"$t\" limit 0", null).use { it.columnNames.joinToString(",") }
+                sb.append("[$t $n rows: $cols] ")
+            }
+        } catch (e: Exception) { sb.append("cannot read schema: ${e.message}") }
+        return sb.toString()
+    }
+
+    /** [opened] is set once a database with the trophy tables was read, so "this account has no record of the game" can be told from "the file could not be read". */
     fun accountDb(ps4: Ps4, account: Account, npwr: String, gameTitle: String, cache: File, notes: MutableList<String>, opened: BooleanArray = BooleanArray(1)): AccountDb? {
-        val dir = "/user/home/${account.id}/trophy/db"
+        val tdir = "/user/home/${account.id}/trophy"
+        val dir = "$tdir/db"
+        notes += "$tdir: " + (try { EzServer.fsList(ps4, tdir, 8000).joinToString { (if (it.isDir) "[" + it.name + "]" else it.name) } } catch (e: Exception) { e.message ?: "?" })
         val l = try { EzServer.fsList(ps4, dir, 8000) } catch (e: Exception) { notes += "$dir: ${e.message}"; return null }
-        val main = l.firstOrNull { it.name == "trophy_local.db" && !it.isDir }
-        if (main == null) { notes += "$dir has no trophy_local.db (found: " + l.take(12).joinToString { it.name } + ")"; return null }
-        val base = File(cache, "troph_" + (ps4.id + account.id).hashCode().toUInt().toString(16) + ".db")
-        val wal = l.firstOrNull { it.name == "trophy_local.db-wal" && !it.isDir }
-        val s = "${main.size}|${main.mtime}|${wal?.size}|${wal?.mtime}"
-        if (!(base.exists() && sig[base.name] == s)) {
-            File(base.path + "-wal").delete(); File(base.path + "-shm").delete(); File(base.path + "-journal").delete()
-            if (!copyTo(ps4, "$dir/${main.name}", main, base)) { notes += "$dir/${main.name}: could not be copied"; return null }
-            val walOk = wal == null || wal.size <= 0 || copyTo(ps4, "$dir/${wal.name}", wal, File(base.path + "-wal"))
-            if (!walOk) notes += "the -wal file could not be copied (recent trophies may be missing)" else sig[base.name] = s
-        }
-        return try {
-            // this is only a cache copy: read-write is the fallback because a read-only connection to a WAL database can fail on older Android
-            val db = try { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READONLY) } catch (e: Exception) { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READWRITE) }
+        // trophy_local.db is where Apollo finds the trophies; any other .db in the folder is checked for the same tables and described when it does not match
+        val files = l.filter { !it.isDir && it.name.endsWith(".db", true) }.sortedByDescending { it.name == "trophy_local.db" }
+        if (files.isEmpty()) { notes += "$dir has no .db file (found: " + l.take(12).joinToString { it.name } + ")"; return null }
+        for (main in files) {
+            val base = File(cache, "troph_" + (ps4.id + account.id + main.name).hashCode().toUInt().toString(16) + ".db")
+            val wal = l.firstOrNull { it.name == main.name + "-wal" && !it.isDir }
+            val s = "${main.size}|${main.mtime}|${wal?.size}|${wal?.mtime}"
+            if (!(base.exists() && sig[base.name] == s)) {
+                File(base.path + "-wal").delete(); File(base.path + "-shm").delete(); File(base.path + "-journal").delete()
+                if (!copyTo(ps4, "$dir/${main.name}", main, base)) { notes += "$dir/${main.name}: could not be copied"; continue }
+                val walOk = wal == null || wal.size <= 0 || copyTo(ps4, "$dir/${wal.name}", wal, File(base.path + "-wal"))
+                if (!walOk) notes += "the -wal file of ${main.name} could not be copied (recent trophies may be missing)" else sig[base.name] = s
+            }
             try {
-                val titles = ArrayList<Pair<DbTitle, Int>>()
-                db.rawQuery("select * from tbl_trophy_title", null).use { c ->
-                    while (c.moveToNext()) {
-                        fun g(p: String, u: String) = c.int("${p}_num").let { tot -> c.int("unlocked_${p}_num") to tot }
-                        val counts = LinkedHashMap<Char, Pair<Int, Int>>()
-                        for ((ch, nm) in listOf('P' to "platinum", 'G' to "gold", 'S' to "silver", 'B' to "bronze")) { val (e, tot) = g(nm, nm); if (tot > 0) counts[ch] = e to tot }
-                        titles += DbTitle(c.int("id"), c.str("trophy_title_id"), c.str("title"), c.int("progress"), c.int("trophy_num"), c.int("unlocked_trophy_num"), counts) to c.int("status")
+                // this is only a cache copy: read-write is the fallback because a read-only connection to a WAL database can fail on older Android
+                val db = try { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READONLY) } catch (e: Exception) { SQLiteDatabase.openDatabase(base.path, null, SQLiteDatabase.OPEN_READWRITE) }
+                try {
+                    val has = db.rawQuery("select count(*) from sqlite_master where type='table' and name='tbl_trophy_title'", null).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
+                    if (!has) { notes += schemaOf(db, main.name) + " (${main.size} B)"; continue }
+                    opened[0] = true
+                    val titles = ArrayList<Pair<DbTitle, Int>>()
+                    db.rawQuery("select * from tbl_trophy_title", null).use { c ->
+                        while (c.moveToNext()) {
+                            val counts = LinkedHashMap<Char, Pair<Int, Int>>()
+                            for ((ch, nm) in listOf('P' to "platinum", 'G' to "gold", 'S' to "silver", 'B' to "bronze")) { val tot = c.int("${nm}_num"); if (tot > 0) counts[ch] = c.int("unlocked_${nm}_num") to tot }
+                            titles += DbTitle(c.int("id"), c.str("trophy_title_id"), c.str("title"), c.int("progress"), c.int("trophy_num"), c.int("unlocked_trophy_num"), counts) to c.int("status")
+                        }
                     }
-                }
-                opened[0] = true
-                if (titles.isEmpty()) { notes += "tbl_trophy_title is empty for ${account.name}"; return null }
-                val live = titles.filter { it.second == 0 }.ifEmpty { titles }.map { it.first }
-                val key = npwr.substringBefore('_')
-                val want = norm(gameTitle)
-                val pick = live.firstOrNull { npwr.isNotEmpty() && it.npwr.equals(npwr, true) }
-                    ?: live.firstOrNull { key.isNotEmpty() && it.npwr.startsWith(key, true) }
-                    ?: live.firstOrNull { want.isNotEmpty() && norm(it.title) == want }
-                    ?: live.filter { want.isNotEmpty() && norm(it.title).let { x -> x.isNotEmpty() && (x.contains(want) || want.contains(x)) } }
-                        .minByOrNull { Math.abs(norm(it.title).length - want.length) }
-                if (pick == null) { notes += "${account.name}: this game is not in the trophy database (${live.size} games there; wanted ${npwr.ifBlank { gameTitle }})"; return null }
-                val list = ArrayList<DbTrophy>()
-                db.rawQuery("select * from tbl_trophy_flag where title_id = ? order by trophyid", arrayOf(pick.dbId.toString())).use { c ->
-                    while (c.moveToNext()) list += DbTrophy(c.int("trophyid"), c.int("groupid"), c.str("title"), c.str("description"), gradeOf(c.int("grade")),
-                        c.int("unlocked") != 0, c.int("visible") != 0, parseTime(c.str("time_unlocked")))
-                }
-                // the group row (trophyid of the base-game "group" entry) is not a trophy: Apollo lists only rows of tbl_trophy_flag, so keep them all except negative ids
-                AccountDb(pick, list.filter { it.id >= 0 })
-            } finally { db.close() }
-        } catch (ex: Exception) { notes += "trophy_local.db (${account.name}): ${ex.message}"; null }
+                    if (titles.isEmpty()) { notes += "tbl_trophy_title is empty for ${account.name} (${main.name})"; continue }
+                    val live = titles.filter { it.second == 0 }.ifEmpty { titles }.map { it.first }
+                    val key = npwr.substringBefore('_')
+                    val want = norm(gameTitle)
+                    val pick = live.firstOrNull { npwr.isNotEmpty() && it.npwr.equals(npwr, true) }
+                        ?: live.firstOrNull { key.isNotEmpty() && it.npwr.startsWith(key, true) }
+                        ?: live.firstOrNull { want.isNotEmpty() && norm(it.title) == want }
+                        ?: live.filter { want.isNotEmpty() && norm(it.title).let { x -> x.isNotEmpty() && (x.contains(want) || want.contains(x)) } }
+                            .minByOrNull { Math.abs(norm(it.title).length - want.length) }
+                    if (pick == null) { notes += "${account.name}: this game is not in ${main.name} (${live.size} games there; wanted ${npwr.ifBlank { gameTitle }})"; continue }
+                    val list = ArrayList<DbTrophy>()
+                    db.rawQuery("select * from tbl_trophy_flag where title_id = ? order by trophyid", arrayOf(pick.dbId.toString())).use { c ->
+                        while (c.moveToNext()) list += DbTrophy(c.int("trophyid"), c.int("groupid"), c.str("title"), c.str("description"), gradeOf(c.int("grade")),
+                            c.int("unlocked") != 0, c.int("visible") != 0, parseTime(c.str("time_unlocked")))
+                    }
+                    return AccountDb(pick, list.filter { it.id >= 0 })
+                } finally { db.close() }
+            } catch (ex: Exception) { notes += "${main.name} (${account.name}): ${ex.message}" }
+        }
+        return null
     }
 
     /** Unlocked trophies of [account] for the game with NPWR id [npwr]. */
