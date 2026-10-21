@@ -92,12 +92,15 @@ object Standby {
     fun available(ctx: Context): Boolean = bundled(ctx) || file(ctx).length() > 1024
 
     /** Copies a chosen file into the app. Returns an error text, or null when saved. */
-    fun import(ctx: Context, uri: Uri): String? = try {
-        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return "Could not read the file."
-        if (bytes.size < 1024 || bytes.size > 4 * 1024 * 1024) return "This does not look like the standby payload (unexpected size)."
-        if (!(bytes[0].toInt() == 0x7F && bytes[1].toInt() == 0x45 && bytes[2].toInt() == 0x4C && bytes[3].toInt() == 0x46)) return "This is not an ELF file."
-        file(ctx).writeBytes(bytes); null
-    } catch (e: Exception) { Ps4Api.friendly(e) }
+    fun import(ctx: Context, uri: Uri): String? {
+        try {
+            val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return "Could not read the file."
+            if (bytes.size < 1024 || bytes.size > 4 * 1024 * 1024) return "This does not look like the standby payload (unexpected size)."
+            if (!(bytes[0].toInt() == 0x7F && bytes[1].toInt() == 0x45 && bytes[2].toInt() == 0x4C && bytes[3].toInt() == 0x46)) return "This is not an ELF file."
+            file(ctx).writeBytes(bytes)
+            return null
+        } catch (e: Exception) { return Ps4Api.friendly(e) }
+    }
 
     /** Sends the payload, then watches the console: success = it answers DDP with "rest mode" (or stops answering) within [waitMs]. Null = success, else a short reason. */
     suspend fun enter(ctx: Context, host: String, waitMs: Long = 40_000L): String? = withContext(Dispatchers.IO) {
