@@ -20,6 +20,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -51,6 +52,7 @@ import kotlinx.coroutines.withContext
                 Switch(Store.dynamic.value, { Store.setDynamic(it) })
             }
         } }
+        item { PowerPanel() }
         item { Panel {
             SectionTitle(tr("Monitoring", "المراقبة"))
             Text(tr("Polling interval", "فاصل الفحص")); Chips(listOf(2, 3, 5, 10), iv, tr("s", "ث")) { iv = it; Store.putInt("poll", it) }
@@ -66,6 +68,51 @@ import kotlinx.coroutines.withContext
         item { NavRow(R.drawable.ic_search, tr("Advanced", "متقدم"), tr("Debug log, stop PS4 server", "سجل التصحيح، إيقاف خادم PS4")) { nav.navigate("settings/advanced") } }
         item { Dim("PS4 Download Monitor 4.2") }
     }
+}
+
+/** Turn the active PS4 off now, or after a chosen time. Both put the console in rest mode (the only thing the standby payload does). */
+@Composable fun PowerPanel() {
+    val ps4 by Ps4Repo.list.collectAsState(); val activeId by Ps4Repo.activeId.collectAsState()
+    val p = ps4.firstOrNull { it.id == activeId } ?: ps4.firstOrNull()
+    val plan by DownloadMonitor.sleepPlan.collectAsState()
+    val ctx = LocalContext.current; val scope = rememberCoroutineScope()
+    var confirm by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf("") }
+    var custom by remember { mutableStateOf("") }
+    var left by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(plan?.endsAt) { while (plan != null) { left = maxOf(0L, ((plan?.endsAt ?: 0L) - System.currentTimeMillis()) / 1000); delay(1000) } }
+    fun fmt(sec: Long) = if (sec >= 3600) "${sec / 3600} h ${(sec % 3600) / 60} min" else if (sec >= 60) "${sec / 60} min ${sec % 60} s" else "$sec s"
+    fun start(min: Int) { val t = p ?: return; if (!Standby.available(ctx)) { msg = Standby.message("no-payload"); return }; msg = ""; DownloadMonitor.startSleepTimer(t, min) }
+    Panel {
+        SectionTitle(tr("Turn off the PS4", "إطفاء الـPS4"))
+        if (p == null) { Dim(tr("Add a PS4 first.", "أضف جهاز PS4 أولاً.")); return@Panel }
+        Dim(tr("For ${p.name}. Both buttons put the console in rest mode (it needs the standby payload, see the PS4's settings). Downloads on the PS4 are not waited for here.",
+            "للجهاز ${p.name}. الزران يُدخلان الجهاز في وضع الراحة (يحتاجان payload الإطفاء، راجع إعدادات الجهاز). لا ينتظر هنا انتهاء التحميلات."))
+        Button(enabled = !busy, onClick = { confirm = true }) { Lbl(tr("Turn off now", "أطفئ الآن")) }
+        HorizontalDivider()
+        Text(tr("Rest mode after…", "وضع الراحة بعد…"), fontWeight = FontWeight.SemiBold)
+        if (plan != null) {
+            Text(tr("Timer running: ${fmt(left)} left", "المؤقت يعمل: المتبقي ${fmt(left)}"))
+            OutlinedButton(onClick = { DownloadMonitor.cancelPowerOff() }) { Lbl(tr("Cancel timer", "إلغاء المؤقت")) }
+        } else {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(15 to tr("15 min", "15 د"), 30 to tr("30 min", "30 د"), 60 to tr("1 h", "ساعة"), 120 to tr("2 h", "ساعتان"), 240 to tr("4 h", "4 ساعات"), 480 to tr("8 h", "8 ساعات"))
+                    .forEach { (m, t) -> FilledTonalButton(onClick = { start(m) }) { Lbl(t) } }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(custom, { custom = it.filter { c -> c.isDigit() }.take(4) }, label = { Text(tr("Minutes (custom)", "دقائق (مخصص)")) }, singleLine = true, modifier = Modifier.weight(1f),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number))
+                Button(enabled = (custom.toIntOrNull() ?: 0) in 1..1440, onClick = { start(custom.toInt()) }) { Lbl(tr("Start", "ابدأ")) }
+            }
+        }
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (msg.isNotEmpty()) Text(msg, fontWeight = FontWeight.SemiBold)
+    }
+    if (confirm && p != null) AlertDialog(onDismissRequest = { confirm = false }, title = { Text(tr("Turn off ${p.name}?", "إطفاء ${p.name}؟")) },
+        text = { Text(tr("The PS4 goes to rest mode now. Unfinished downloads on it may stop.", "سيدخل الجهاز وضع الراحة الآن. قد تتوقف التحميلات غير المكتملة عليه.")) },
+        confirmButton = { TextButton(onClick = { confirm = false; busy = true; msg = ""; scope.launch { msg = DownloadMonitor.sleepNow(p); busy = false } }) { Lbl(tr("Turn off", "إطفاء")) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Lbl(tr("Cancel", "إلغاء")) } })
 }
 
 @Composable fun AdvancedScreen(nav: NavController) {

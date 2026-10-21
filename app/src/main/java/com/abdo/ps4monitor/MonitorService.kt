@@ -49,12 +49,12 @@ class MonitorService : Service() {
             // Re-evaluate every few seconds: summary text + stop when nothing needs watching.
             while (isActive) {
                 val n = DownloadRepo.all.value.count { DownloadMonitor.isWatch(it) }
-                val opsOn = Ops.active.value > 0 || DownloadMonitor.offPlan.value != null
+                val opsOn = Ops.active.value > 0 || DownloadMonitor.offPlan.value != null || DownloadMonitor.sleepPlan.value != null
                 if (n == 0 && !opsOn) {
                     if (idleSince == 0L) idleSince = System.currentTimeMillis()
                     if (System.currentTimeMillis() - idleSince > 5000) { stopSelf(); return@launch }   // grace period for a download submitted right now
                 } else idleSince = 0L
-                val text = if (DownloadMonitor.offPlan.value != null) tr("Waiting to turn the PS4 off", "بانتظار إطفاء الـPS4") else if (opsOn) Ops.label.value else tr("Monitoring $n download${if (n > 1) "s" else ""}", "مراقبة $n تحميل")
+                val text = if (DownloadMonitor.offPlan.value != null || DownloadMonitor.sleepPlan.value != null) tr("Waiting to turn the PS4 off", "بانتظار إطفاء الـPS4") else if (opsOn) Ops.label.value else tr("Monitoring $n download${if (n > 1) "s" else ""}", "مراقبة $n تحميل")
                 lastText = text; Notifier.refreshSummary(this@MonitorService, text); Notifier.refreshDownloads(); Notifier.syncForeground(text)
                 delay(3000)
             }

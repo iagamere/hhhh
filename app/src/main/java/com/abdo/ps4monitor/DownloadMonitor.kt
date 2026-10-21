@@ -56,6 +56,7 @@ object DownloadMonitor {
     fun restore() {
         if (restored) { ensureAll(); return }
         restored = true
+        runCatching { restoreSleep() }
         DownloadRepo.all.value.filter { it.state == DlState.SUBMITTING }.forEach {
             DownloadRepo.update(it.id) { x -> x.copy(state = DlState.FAILED, errorMessage = "The app closed while sending. The request was NOT repeated; check the PS4 or retry.", note = "") }
         }
@@ -242,8 +243,48 @@ object DownloadMonitor {
         d(if (on) "Download marked: turn the PS4 off when it finishes" else "Download unmarked: the PS4 stays on")
         if (on) { Ps4Repo.get(DownloadRepo.get(id)?.ps4Id)?.let { maybePowerOff(it) }; kick() }
     }
-    /** Cancel from the UI / notification. */
+    // ---- sleep timer (Settings): rest mode after a chosen time, whatever the downloads are doing ----
+    val sleepPlan = MutableStateFlow<OffPlan?>(null)
+    @Volatile private var sleepJob: Job? = null
+    fun startSleepTimer(p: Ps4, minutes: Int) = runSleep(p.id, p.name, System.currentTimeMillis() + minutes * 60_000L)
+    private fun runSleep(id: String, name: String, endsAt: Long) {
+        sleepJob?.cancel()
+        Store.sp.edit().putString("sleep_ps4", id).putLong("sleep_end", endsAt).apply()
+        sleepPlan.value = OffPlan(id, name, endsAt)
+        d("Sleep timer set: $name goes to rest mode in ${(endsAt - System.currentTimeMillis()) / 60_000} min")
+        startSvc()
+        sleepJob = scope.launch {
+            try {
+                while (System.currentTimeMillis() < endsAt - 60_000L) delay(1000)
+                while (true) {
+                    val left = ((endsAt - System.currentTimeMillis() + 999) / 1000).toInt()
+                    if (left <= 0) break
+                    Notifier.powerOffCountdown(name, left); delay(1000)
+                }
+                Notifier.powerOffCountdown(name, 0)
+                val p = Ps4Repo.get(id)
+                val err = if (p == null) "no-host" else Standby.enter(app, p.host)
+                d(if (err == null) "Sleep timer: PS4 is in rest mode" else "Sleep timer failed: $err")
+                Store.sp.edit().remove("sleep_ps4").remove("sleep_end").apply(); sleepPlan.value = null
+                Notifier.powerOffResult(name, Standby.message(err), err == null)
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) { sleepPlan.value = null; Notifier.powerOffResult(name, Standby.message("failed"), false) }
+        }
+    }
+    /** Re-arms a timer saved before the process died. A timer that ran out more than 2 minutes ago is dropped (never a surprise shutdown). */
+    private fun restoreSleep() {
+        val id = Store.sp.getString("sleep_ps4", null) ?: return; val end = Store.sp.getLong("sleep_end", 0L)
+        val p = Ps4Repo.get(id)
+        if (p == null || end < System.currentTimeMillis() - 120_000L) { Store.sp.edit().remove("sleep_ps4").remove("sleep_end").apply(); return }
+        if (sleepPlan.value == null) runSleep(p.id, p.name, end)
+    }
+    /** Immediately: the PS4 goes to rest mode. Returns the text to show. */
+    suspend fun sleepNow(p: Ps4): String { d("Rest mode requested from Settings"); return Standby.message(Standby.enter(app, p.host)) }
+
+    /** Cancel from the UI / notification (the downloads countdown and the sleep timer). */
     fun cancelPowerOff() {
+        sleepJob?.cancel(); sleepJob = null
+        if (sleepPlan.value != null) { d("Sleep timer cancelled"); sleepPlan.value = null; Store.sp.edit().remove("sleep_ps4").remove("sleep_end").apply() }
         offJob?.cancel(); offJob = null
         if (offPlan.value != null) d("Turning off the PS4: cancelled by the user")
         offPlan.value = null; Notifier.powerOffClear()

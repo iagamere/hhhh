@@ -79,12 +79,14 @@ import kotlinx.coroutines.withContext
 
 /** Shown while the PS4 is about to be turned off (the countdown that follows the last download). */
 @Composable fun PowerOffBanner() {
-    val plan by DownloadMonitor.offPlan.collectAsState()
-    val p = plan ?: return
+    val off by DownloadMonitor.offPlan.collectAsState()
+    val sleep by DownloadMonitor.sleepPlan.collectAsState()
+    val p = off ?: sleep ?: return
     var left by remember(p.endsAt) { mutableLongStateOf(maxOf(0L, (p.endsAt - System.currentTimeMillis()) / 1000)) }
     LaunchedEffect(p.endsAt) { while (left > 0) { delay(500); left = maxOf(0L, (p.endsAt - System.currentTimeMillis() + 999) / 1000) } }
     Panel(Modifier.padding(top = 8.dp)) {
-        Text(if (left > 0) tr("${p.ps4Name} will be turned off in $left s", "سيُطفأ ${p.ps4Name} بعد $left ثانية") else tr("Turning off ${p.ps4Name}…", "جارٍ إطفاء ${p.ps4Name}…"), fontWeight = FontWeight.SemiBold)
+        Text(if (left > 60 && off == null) tr("${p.ps4Name} goes to rest mode in ${(left + 59) / 60} min", "سيدخل ${p.ps4Name} وضع الراحة بعد ${(left + 59) / 60} دقيقة")
+            else if (left > 0) tr("${p.ps4Name} will be turned off in $left s", "سيُطفأ ${p.ps4Name} بعد $left ثانية") else tr("Turning off ${p.ps4Name}…", "جارٍ إطفاء ${p.ps4Name}…"), fontWeight = FontWeight.SemiBold)
         if (left > 0) OutlinedButton(onClick = { DownloadMonitor.cancelPowerOff() }) { Lbl(tr("Cancel", "إلغاء")) }
     }
 }
