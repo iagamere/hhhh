@@ -238,6 +238,7 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
     LaunchedEffect(links.firstOrNull()) { if (!nameEdited) name = links.firstOrNull()?.let { Names.fromUrl(it) }.orEmpty() }
     var msg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var powerOff by remember { mutableStateOf(false) }
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     AlertDialog(onDismissRequest = { if (!busy) close() }, title = { Text(tr("Download to PS4", "تحميل إلى PS4")) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -251,6 +252,14 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
                 OutlinedTextField(dest, { dest = it }, label = { Text(tr("Destination folder on the PS4", "مجلد الوجهة على الـPS4")) }, singleLine = true)
                 if (links.size <= 1) OutlinedTextField(name, { name = it; nameEdited = true }, label = { Text(tr("File name on the PS4", "اسم الملف على الـPS4")) }, singleLine = true,
                     supportingText = { Text(tr("Must end with .pkg to appear in the PS4 package list", "يجب أن ينتهي بـ .pkg ليظهر في قائمة الحزم")) })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("Turn the PS4 off when the download finishes", "إطفاء الـPS4 بعد انتهاء التحميل"), style = MaterialTheme.typography.bodyMedium)
+                        if (powerOff) Dim(if (Standby.available(ctx)) tr("60 s warning with a Cancel button; waits for every other download on this PS4.", "تنبيه 60 ثانية مع زر إلغاء؛ ينتظر كل التحميلات الأخرى على هذا الـPS4.")
+                            else tr("The standby payload is missing: choose standby.elf in this PS4's settings, otherwise nothing will be turned off.", "payload الإطفاء غير موجود: اختر standby.elf من إعدادات هذا الـPS4، وإلا لن يُطفأ شيء."))
+                    }
+                    Switch(powerOff, { powerOff = it }, enabled = !busy)
+                }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (msg.isNotEmpty()) Text(msg, fontWeight = FontWeight.SemiBold)
                 Dim(tr("PS4 server saves to exactly this folder and file name, then renames from .tmp when finished. The size is read from PS4 server.", "يحفظ خادم PS4 في هذا المجلد وبهذا الاسم تمامًا، ثم يعيد التسمية من .tmp عند الانتهاء. الحجم يُقرأ من خادم PS4."))
@@ -263,7 +272,7 @@ fun resultText(r: SubmitResult) = Tx.t(when (r) {
                 val out = StringBuilder(); var ok = 0
                 links.forEachIndexed { i, l ->
                     if (i > 0) delay(4000)
-                    val r = DownloadMonitor.submit(target, l, dest, if (links.size == 1) name.trim().ifBlank { null } else null)
+                    val r = DownloadMonitor.submit(target, l, dest, if (links.size == 1) name.trim().ifBlank { null } else null, powerOff = powerOff && i == links.lastIndex)
                     if (r is SubmitResult.Accepted) ok++
                     out.append(if (links.size > 1) "${i + 1}/${links.size}: " else "").append(resultText(r)).append('\n'); msg = out.toString()
                 }

@@ -6,6 +6,9 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
+import android.content.Context
+import android.net.Uri
+import java.io.File
 
 /** What the console itself says about its power state (DDP, UDP port 987). */
 enum class Power(private val en: String, private val ar: String) {
@@ -74,5 +77,55 @@ object Ps4Power {
         err.startsWith("send-failed") -> tr("Could not send the wake packet ($err).", "تعذّر إرسال حزمة التشغيل ($err).")
         else -> tr("Wake packet sent but the PS4 did not turn on. Check the key, and on the PS4: Settings > Power Save Settings > Set Features Available in Rest Mode > turn on \"Stay Connected to the Internet\" and \"Enable Turning on PS4 from Network\".",
             "أُرسلت حزمة التشغيل لكن الـPS4 لم يعمل. تحقق من المفتاح، وفي الـPS4: الإعدادات > إعدادات توفير الطاقة > تحديد الميزات المتاحة في وضع الراحة > فعّل «البقاء متصلاً بالإنترنت» و«تمكين تشغيل PS4 من الشبكة».")
+    }
+}
+
+/**
+ * Turning the PS4 off. Neither DDP nor our download server (port 6701) has a "go to rest mode" command, so the app sends a tiny payload
+ * (assets/standby.elf, or the file chosen in the PS4's settings) to GoldHEN's payload loader (TCP 9090, the same way the server is sent).
+ * The payload only asks the system to enter rest mode (see payload/standby/standby.c). NOT tested on a real console by the author.
+ */
+object Standby {
+    fun file(ctx: Context) = File(ctx.filesDir, "standby.elf")
+    private fun bundled(ctx: Context): Boolean = try { ctx.assets.open("standby.elf").use { true } } catch (e: Exception) { false }
+    /** True when there is a payload to send (bundled in the app, or imported). */
+    fun available(ctx: Context): Boolean = bundled(ctx) || file(ctx).length() > 1024
+
+    /** Copies a chosen file into the app. Returns an error text, or null when saved. */
+    fun import(ctx: Context, uri: Uri): String? = try {
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return "Could not read the file."
+        if (bytes.size < 1024 || bytes.size > 4 * 1024 * 1024) return "This does not look like the standby payload (unexpected size)."
+        if (!(bytes[0].toInt() == 0x7F && bytes[1].toInt() == 0x45 && bytes[2].toInt() == 0x4C && bytes[3].toInt() == 0x46)) return "This is not an ELF file."
+        file(ctx).writeBytes(bytes); null
+    } catch (e: Exception) { Ps4Api.friendly(e) }
+
+    /** Sends the payload, then watches the console: success = it answers DDP with "rest mode" (or stops answering) within [waitMs]. Null = success, else a short reason. */
+    suspend fun enter(ctx: Context, host: String, waitMs: Long = 40_000L): String? = withContext(Dispatchers.IO) {
+        if (host.isBlank()) return@withContext "no-host"
+        if (!available(ctx)) return@withContext "no-payload"
+        val f = File(ctx.cacheDir, "standby-send.elf")
+        try {
+            if (file(ctx).length() > 1024) file(ctx).copyTo(f, overwrite = true)
+            else ctx.assets.open("standby.elf").use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+        } catch (e: Exception) { return@withContext "payload-unreadable" }
+        val err = ServerLoader.send(host, f) { }
+        runCatching { f.delete() }
+        if (err != null) return@withContext "send-failed: $err"
+        val end = System.currentTimeMillis() + waitMs
+        while (System.currentTimeMillis() < end) {
+            delay(2500)
+            val pw = Ps4Power.probe(host, 800)
+            if (pw == Power.REST || pw == Power.OFF) return@withContext null
+        }
+        "still-on"
+    }
+
+    fun message(err: String?): String = when {
+        err == null -> tr("The PS4 went to rest mode.", "دخل الـPS4 في وضع الراحة.")
+        err == "no-payload" -> tr("No standby payload in the app. Choose standby.elf in this PS4's settings.", "لا يوجد payload الإطفاء في التطبيق. اختر standby.elf من إعدادات هذا الـPS4.")
+        err == "no-host" -> tr("This PS4 has no IP address.", "لا يوجد عنوان IP لهذا الـPS4.")
+        err == "payload-unreadable" -> tr("Could not read the standby payload.", "تعذّرت قراءة payload الإطفاء.")
+        err.startsWith("send-failed") -> tr("Could not send the payload to the PS4 (GoldHEN's payload loader, port 9090, must be on): ", "تعذّر إرسال payload إلى الـPS4 (يجب تفعيل محمّل الـpayload في GoldHEN، المنفذ 9090): ") + err.removePrefix("send-failed: ")
+        else -> tr("The payload was sent but the PS4 is still on.", "أُرسل payload لكن الـPS4 ما زال يعمل.")
     }
 }

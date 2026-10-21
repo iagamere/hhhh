@@ -54,6 +54,8 @@ object Notifier {
     const val ACT_PAUSE = "com.abdo.ps4monitor.NOTIF_PAUSE"
     const val ACT_RESUME = "com.abdo.ps4monitor.NOTIF_RESUME"
     const val ACT_DELETE = "com.abdo.ps4monitor.NOTIF_DELETE"
+    const val ACT_POFF_CANCEL = "com.abdo.ps4monitor.NOTIF_POFF_CANCEL"
+    private const val POFF_ID = 3
     private const val CONFIRM_MS = 6_000L
     private val confirmDel = ConcurrentHashMap<String, Long>()     // download id -> time until which the next Delete tap is the confirmation
     private val posted = ConcurrentHashMap<Int, String>()          // notification id -> signature of the card currently shown
@@ -547,6 +549,7 @@ object Notifier {
     /** Buttons of a card (called by [NotifActionReceiver]). Same operations as the buttons in the app. */
     fun onAction(action: String, id: String) {
         if (!::ctx.isInitialized) return
+        if (action == ACT_POFF_CANCEL) { DownloadMonitor.cancelPowerOff(); return }
         if (DownloadRepo.get(id) == null) return
         when (action) {
             ACT_PAUSE -> Ops.launch(tr("Pausing…", "إيقاف مؤقت…")) { DownloadMonitor.pause(id) }
@@ -563,6 +566,25 @@ object Notifier {
             }
         }
     }
+
+    // ---- "turn the PS4 off when the downloads are done": countdown (with a Cancel button) and result ----
+    fun powerOffCountdown(ps4: String, secsLeft: Int) {
+        if (!::ctx.isInitialized) return
+        val cancel = PendingIntent.getBroadcast(ctx, 7001, Intent(ctx, NotifActionReceiver::class.java).setAction(ACT_POFF_CANCEL)
+            .setData(Uri.parse("ps4mon://poweroff/cancel")).putExtra("id", "-"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val text = if (secsLeft > 0) tr("$ps4 will be turned off in $secsLeft s", "سيُطفأ $ps4 بعد $secsLeft ثانية") else tr("Turning off $ps4…", "جارٍ إطفاء $ps4…")
+        val b = NotificationCompat.Builder(ctx, "alerts").setSmallIcon(R.drawable.ic_stat_ps4).setOngoing(true).setOnlyAlertOnce(true).setContentIntent(pi())
+            .setContentTitle(tr("Downloads finished", "انتهت التحميلات")).setContentText(text)
+        if (secsLeft > 0) b.addAction(0, tr("Cancel", "إلغاء"), cancel)
+        post(POFF_ID, b.build())
+    }
+    fun powerOffResult(ps4: String, text: String, ok: Boolean) {
+        if (!::ctx.isInitialized) return
+        post(POFF_ID, NotificationCompat.Builder(ctx, "done").setSmallIcon(R.drawable.ic_stat_ps4).setAutoCancel(true).setContentIntent(pi())
+            .setContentTitle(if (ok) tr("$ps4 turned off", "تم إطفاء $ps4") else tr("$ps4 was not turned off", "لم يُطفأ $ps4")).setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text)).build())
+    }
+    fun powerOffClear() { if (::ctx.isInitialized) runCatching { NotificationManagerCompat.from(ctx).cancel(POFF_ID) } }
 
     private fun post(id: Int, n: Notification) {
         if (!::ctx.isInitialized) return

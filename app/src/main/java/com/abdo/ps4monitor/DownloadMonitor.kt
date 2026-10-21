@@ -86,7 +86,7 @@ object DownloadMonitor {
      * PS4 server takes "dest" as the FINAL FILE PATH and writes "<dest>.tmp". So a folder + unique file name is always sent;
      * that path is then the exact identity of the download.
      */
-    suspend fun submit(ps4: Ps4, url: String, destIn: String, fileNameIn: String?, retryOf: Download? = null): SubmitResult = withContext(Dispatchers.IO) {
+    suspend fun submit(ps4: Ps4, url: String, destIn: String, fileNameIn: String?, retryOf: Download? = null, powerOff: Boolean = false): SubmitResult = withContext(Dispatchers.IO) {
         val u = url.trim()
         if (!Regex("^https?://\\S+$").matches(u)) return@withContext SubmitResult.Invalid("That is not a valid http(s) link.")
         if (ps4.host.isBlank()) return@withContext SubmitResult.Invalid("This PS4 has no IP address yet.")
@@ -99,7 +99,7 @@ object DownloadMonitor {
         try { Ps4Server.list(ps4, 3000).filter { parent(it.path) == dest }.forEach { taken += it.path.substringAfterLast('/') } } catch (e: Exception) { }
         val name = uniqueName(Names.clean(fileNameIn ?: Names.fromUrl(u)).ifBlank { "download.pkg" }, taken)
         val id = UUID.randomUUID().toString(); val now = System.currentTimeMillis()
-        DownloadRepo.add(Download(id, ps4.id, u, name, dest, name, (retryOf?.attempt ?: 0) + 1, createdAt = now, submittedAt = now, notificationId = Store.nextNotifId()))
+        DownloadRepo.add(Download(id, ps4.id, u, name, dest, name, (retryOf?.attempt ?: 0) + 1, createdAt = now, submittedAt = now, notificationId = Store.nextNotifId(), powerOff = powerOff || retryOf?.powerOff == true))
         d("Download request submitted (${ps4.name})")
         when (val r = sendLink(ps4, u, joinPath(dest, name))) {
             is Ps4Api.Submit.Rejected -> { DownloadRepo.remove(id); d("State: rejected — ${r.message}"); SubmitResult.Rejected(r.message) }
@@ -228,6 +228,65 @@ object DownloadMonitor {
         return Ps4Power.wakeMessage(err)
     }
 
+
+    // ---------------- turn the PS4 off when the downloads are done ----------------
+    /** A pending "turn the PS4 off" (counting down). The UI shows it with a Cancel button. */
+    data class OffPlan(val ps4Id: String, val ps4Name: String, val endsAt: Long)
+    val offPlan = MutableStateFlow<OffPlan?>(null)
+    @Volatile private var offJob: Job? = null
+    private const val OFF_DELAY_MS = 60_000L
+
+    /** The per-download switch ("turn the PS4 off when this finishes"). */
+    fun setPowerOff(id: String, on: Boolean) {
+        DownloadRepo.update(id) { it.copy(powerOff = on) }
+        d(if (on) "Download marked: turn the PS4 off when it finishes" else "Download unmarked: the PS4 stays on")
+        if (on) { Ps4Repo.get(DownloadRepo.get(id)?.ps4Id)?.let { maybePowerOff(it) }; kick() }
+    }
+    /** Cancel from the UI / notification. */
+    fun cancelPowerOff() {
+        offJob?.cancel(); offJob = null
+        if (offPlan.value != null) d("Turning off the PS4: cancelled by the user")
+        offPlan.value = null; Notifier.powerOffClear()
+    }
+
+    /**
+     * Called by the polling loop after every pass. When at least one download of this PS4 is marked, COMPLETED and verified, and nothing else
+     * on this PS4 is still being downloaded, a 60 s countdown starts and then the PS4 is sent to rest mode. A failed or paused marked download never triggers it.
+     */
+    @Synchronized private fun maybePowerOff(p: Ps4) {
+        if (offPlan.value != null) return
+        val all = DownloadRepo.all.value.filter { it.ps4Id == p.id && !it.superseded }
+        val marked = all.filter { it.powerOff && it.state == DlState.COMPLETED }
+        if (marked.isEmpty()) return
+        if (all.any { isWatch(it) || it.state == DlState.SUBMITTING }) return          // something is still downloading: wait for it
+        // consume the marks now: the shutdown is a one-time event (an app restart during the countdown never turns the PS4 off by surprise)
+        marked.forEach { m -> DownloadRepo.update(m.id) { it.copy(powerOff = false) } }
+        val end = System.currentTimeMillis() + OFF_DELAY_MS
+        offPlan.value = OffPlan(p.id, p.name, end)
+        d("All downloads finished: the PS4 will be turned off in ${OFF_DELAY_MS / 1000} s unless cancelled")
+        offJob = scope.launch {
+            try {
+                startSvc()                                                              // keeps the process alive during the countdown
+                var left = OFF_DELAY_MS / 1000
+                while (left > 0) {
+                    Notifier.powerOffCountdown(p.name, left.toInt())
+                    delay(1000); left--
+                    if (DownloadRepo.all.value.any { it.ps4Id == p.id && !it.superseded && (isWatch(it) || it.state == DlState.SUBMITTING) }) {
+                        d("Turning off the PS4: cancelled, a new download started"); offPlan.value = null
+                        Notifier.powerOffResult(p.name, tr("Cancelled: a new download started.", "أُلغي الإطفاء: بدأ تحميل جديد."), false); return@launch
+                    }
+                }
+                Notifier.powerOffCountdown(p.name, 0)
+                d("Turning off the PS4 now (rest mode)")
+                val err = Standby.enter(app, p.host)
+                d(if (err == null) "PS4 is in rest mode" else "Turning off failed: $err")
+                offPlan.value = null
+                Notifier.powerOffResult(p.name, Standby.message(err), err == null)
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) { d("Turning off failed: ${e.javaClass.simpleName}"); offPlan.value = null; Notifier.powerOffResult(p.name, Standby.message("failed"), false) }
+        }
+    }
+
     // ---------------- polling loop ----------------
     private suspend fun loop(ps4Id: String) {
         var downSince = 0L
@@ -257,6 +316,7 @@ object DownloadMonitor {
                 if (System.currentTimeMillis() - downSince > limit) tryHeal(p, System.currentTimeMillis())
             }
             syncNotifs()
+            maybePowerOff(p)
             val wait = if (srv != null) s.interval * 1000L else if (System.currentTimeMillis() - downSince > 300_000L) 30_000L else 10_000L
             withTimeoutOrNull(wait) { wake.first() }
         }

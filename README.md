@@ -1,3 +1,11 @@
+# PS4 Download Monitor 5.9
+
+## 5.9 turn the PS4 off when a download finishes
+- **New switch "Turn the PS4 off when the download finishes"** in the send dialog (Download to PS4) and on each download's screen (while it is active or paused). It is saved with the download.
+- **When it fires:** only after a marked download is COMPLETED and verified AND nothing else on that PS4 is still downloading (paused ones do not block). A failed download never turns the PS4 off. Then a 60 s countdown starts (banner on the Downloads screens + a notification, both with Cancel); a new download starting during it cancels the shutdown. The mark is used up once, so restarting the app never turns the PS4 off by surprise.
+- **How the PS4 is turned off:** our server (`server.elf`) and the console's discovery protocol have no rest-mode command, so the app sends a small payload, `standby.elf`, to GoldHEN's payload loader (port 9090) like it does for the server, then checks that the console answers "rest mode" (or stops answering) within 40 s. Source: `payload/standby/standby.c` (calls `sceSystemStateMgrEnterStandby`). Put the built file in `app/src/main/assets/standby.elf` or choose it in the PS4's settings > "Turn off after downloads" (there is also a "Test: turn off now" button).
+- **LIMITS:** `standby.elf` is NOT built here and the whole feature is NOT tried on a console; without the payload the switch shows a warning and nothing is turned off. NOT compiled (no Android SDK).
+
 # PS4 Download Monitor 5.8
 
 ## 5.8 no ezRemote at all

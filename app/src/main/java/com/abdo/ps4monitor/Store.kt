@@ -86,7 +86,7 @@ object DownloadRepo {
     fun update(id: String, f: (Download) -> Download) {
         var structural = false
         all.update { l -> l.map { if (it.id == id) { val n = f(it).copy(updatedAt = System.currentTimeMillis())
-            structural = n.state != it.state || n.terminalNotified != it.terminalNotified || n.pkgTitle != it.pkgTitle || n.superseded != it.superseded
+            structural = n.state != it.state || n.terminalNotified != it.terminalNotified || n.pkgTitle != it.pkgTitle || n.superseded != it.superseded || n.powerOff != it.powerOff
             n } else it } }
         flush(structural)        // byte counters are written at most every 10 s
     }
@@ -102,7 +102,7 @@ object DownloadRepo {
                 .put("state", d.state.name).put("note", d.note).put("err", d.errorMessage ?: JSONObject.NULL)
                 .put("created", d.createdAt).put("submitted", d.submittedAt).put("started", d.startedAt).put("completed", d.completedAt)
                 .put("nid", d.notificationId).put("tn", d.terminalNotified)
-                .put("ptitle", d.pkgTitle ?: JSONObject.NULL).put("ptid", d.titleId ?: JSONObject.NULL).put("icon", d.iconReady).put("upd", d.updatedAt))
+                .put("ptitle", d.pkgTitle ?: JSONObject.NULL).put("ptid", d.titleId ?: JSONObject.NULL).put("icon", d.iconReady).put("upd", d.updatedAt).put("poff", d.powerOff))
         }
         Store.secure.edit().putString("downloads", arr.toString()).apply()
     }
@@ -118,7 +118,7 @@ object DownloadRepo {
             Download(o.getString("id"), o.getString("ps4"), o.optString("url"), o.getString("name"), o.getString("dest"), fname,
                 o.optInt("att", 1), o.optBoolean("sup"), if (o.isNull("exp")) null else o.getLong("exp"), o.optLong("size"), 0.0, -1,
                 st, note, err, o.getLong("created"), o.optLong("submitted"), o.optLong("started"), o.optLong("completed"),
-                o.getInt("nid"), o.optBoolean("tn"), s("ptitle"), s("ptid"), o.optBoolean("icon"), o.optLong("upd", o.getLong("created")))
+                o.getInt("nid"), o.optBoolean("tn"), s("ptitle"), s("ptid"), o.optBoolean("icon"), o.optLong("upd", o.getLong("created")), o.optBoolean("poff"))
         }.getOrNull() }
     }
 }

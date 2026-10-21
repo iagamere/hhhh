@@ -130,6 +130,16 @@ import kotlinx.coroutines.withContext
     var result by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+    var hasStandby by remember { mutableStateOf(Standby.available(ctx)) }
+    var standbyMsg by remember { mutableStateOf("") }
+    var standbyBusy by remember { mutableStateOf(false) }
+    val standbyPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri: android.net.Uri? ->
+        if (uri != null) scope.launch {
+            val err = withContext(Dispatchers.IO) { Standby.import(ctx, uri) }
+            if (err != null) standbyMsg = Tx.t(err) else { hasStandby = true; standbyMsg = tr("Standby payload saved in the app.", "حُفظ payload الإطفاء داخل التطبيق.") }
+        }
+    }
     var scanning by remember { mutableStateOf(false) }
     var scanDone by remember { mutableStateOf(false) }
     var scanNoNet by remember { mutableStateOf(false) }
@@ -177,6 +187,20 @@ import kotlinx.coroutines.withContext
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Switch(autoWake && wakeKey.isNotBlank(), { autoWake = it }, enabled = wakeKey.isNotBlank())
                 Text(tr("Wake the PS4 by itself when it is in rest mode and a download is unfinished", "أيقظ الـPS4 تلقائياً إن كان في وضع الراحة وهناك تحميل غير مكتمل"), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Panel {
+            Text(tr("Turn off after downloads", "الإطفاء بعد التحميل"), fontWeight = FontWeight.SemiBold)
+            Dim(tr("The download switch \"Turn the PS4 off when the download finishes\" sends a small payload (standby.elf) to GoldHEN's payload loader (port 9090), which puts the PS4 in rest mode. Turn on \"Enable PayLoader Server\" in GoldHEN's settings. Build standby.elf from payload/standby in the project.",
+                "مفتاح التحميل «إطفاء الـPS4 بعد انتهاء التحميل» يرسل payload صغيراً (standby.elf) إلى محمّل الـpayload في GoldHEN (المنفذ 9090) فيُدخل الـPS4 في وضع الراحة. فعّل «Enable PayLoader Server» في إعدادات GoldHEN. ابنِ standby.elf من المجلد payload/standby في المشروع."))
+            Text(if (hasStandby) tr("Standby payload: ready", "payload الإطفاء: جاهز") else tr("Standby payload: not chosen", "payload الإطفاء: غير مختار"), style = MaterialTheme.typography.bodyMedium)
+            if (standbyMsg.isNotEmpty()) Text(standbyMsg, fontWeight = FontWeight.SemiBold)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { standbyPicker.launch(arrayOf("*/*")) }) { Lbl(tr("Choose standby.elf", "اختيار standby.elf")) }
+                OutlinedButton(enabled = hasStandby && host.isNotBlank() && !standbyBusy, onClick = {
+                    standbyBusy = true; standbyMsg = tr("Sending… the PS4 will go to rest mode if it works.", "جارٍ الإرسال… سيدخل الـPS4 وضع الراحة إن نجح.")
+                    scope.launch { standbyMsg = Standby.message(Standby.enter(ctx, host.trim())); standbyBusy = false }
+                }) { Lbl(tr("Test: turn off now", "تجربة: أطفئ الآن")) }
             }
         }
         if (busy) LinearProgressIndicator(full)

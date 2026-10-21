@@ -44,6 +44,7 @@ import kotlinx.coroutines.withContext
     BackHandler(enabled = selecting) { sel = emptySet() }
     LaunchedEffect(Unit) { Ps4Repo.active()?.let { DownloadMonitor.probe(it) } }       // discovers downloads started elsewhere
     Column(Modifier.padding(horizontal = 16.dp)) {
+        PowerOffBanner()
         Row(Modifier.padding(top = 8.dp).heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (selecting) {
                 IconButton(onClick = { sel = emptySet() }) { Ico(R.drawable.ic_close) }
@@ -74,6 +75,18 @@ import kotlinx.coroutines.withContext
     pauseId?.let { ConfirmPause(it) { pauseId = null } }
     resumeId?.let { ConfirmResume(it) { resumeId = null } }
     confirmDelete?.let { ConfirmDeleteDownloads(it, onDone = { sel = emptySet() }, close = { confirmDelete = null }) }
+}
+
+/** Shown while the PS4 is about to be turned off (the countdown that follows the last download). */
+@Composable fun PowerOffBanner() {
+    val plan by DownloadMonitor.offPlan.collectAsState()
+    val p = plan ?: return
+    var left by remember(p.endsAt) { mutableLongStateOf(maxOf(0L, (p.endsAt - System.currentTimeMillis()) / 1000)) }
+    LaunchedEffect(p.endsAt) { while (left > 0) { delay(500); left = maxOf(0L, (p.endsAt - System.currentTimeMillis() + 999) / 1000) } }
+    Panel(Modifier.padding(top = 8.dp)) {
+        Text(if (left > 0) tr("${p.ps4Name} will be turned off in $left s", "سيُطفأ ${p.ps4Name} بعد $left ثانية") else tr("Turning off ${p.ps4Name}…", "جارٍ إطفاء ${p.ps4Name}…"), fontWeight = FontWeight.SemiBold)
+        if (left > 0) OutlinedButton(onClick = { DownloadMonitor.cancelPowerOff() }) { Lbl(tr("Cancel", "إلغاء")) }
+    }
 }
 
 @Composable fun DownloadDetail(id: String, nav: NavController) {
@@ -150,6 +163,18 @@ import kotlinx.coroutines.withContext
                         FilterChip(selected = q.priority == v, onClick = { act("prio", v) }, label = { Lbl(label) })
                     }
                 }
+            }
+        }
+        PowerOffBanner()
+        if (!d.superseded && (d.state.active || d.state == DlState.PAUSED)) Panel {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Turn the PS4 off when the download finishes", "إطفاء الـPS4 بعد انتهاء التحميل"), fontWeight = FontWeight.SemiBold)
+                    Dim(if (Standby.available(ctx)) tr("Waits for every other download on this PS4, then a 60 s warning with a Cancel button. A failed download never turns it off.",
+                        "ينتظر كل التحميلات الأخرى على هذا الـPS4 ثم تنبيه 60 ثانية مع زر إلغاء. التحميل الفاشل لا يُطفئه.")
+                        else tr("The standby payload is missing: choose standby.elf in this PS4's settings, otherwise nothing will be turned off.", "payload الإطفاء غير موجود: اختر standby.elf من إعدادات هذا الـPS4، وإلا لن يُطفأ شيء."))
+                }
+                Switch(d.powerOff, { DownloadMonitor.setPowerOff(d.id, it) })
             }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

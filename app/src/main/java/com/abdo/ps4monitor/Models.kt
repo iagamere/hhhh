@@ -41,7 +41,9 @@ data class Download(
     val createdAt: Long, val submittedAt: Long = 0, val startedAt: Long = 0, val completedAt: Long = 0,
     val notificationId: Int, val terminalNotified: Boolean = false,
     val pkgTitle: String? = null, val titleId: String? = null, val iconReady: Boolean = false,
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    /** Turn the PS4 off (rest mode) once this download has finished and nothing else on that PS4 is still downloading. */
+    val powerOff: Boolean = false
 ) {
     /** Final file path on the PS4 = the "dest" PS4 server received; the data is written to "<path>.tmp" until it finishes. */
     val path: String? get() = fileName?.let { joinPath(dest, it) }
