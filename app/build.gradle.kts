@@ -8,7 +8,7 @@ android {
     compileSdk = 34
     defaultConfig {
         applicationId = "com.abdo.ps4monitor"
-        minSdk = 26; targetSdk = 30; versionCode = 34; versionName = "5.9.1"
+        minSdk = 26; targetSdk = 30; versionCode = 35; versionName = "5.9.2"
     }
     signingConfigs {
         getByName("debug") {

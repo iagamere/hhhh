@@ -1,3 +1,10 @@
+# PS4 Download Monitor 5.9.2
+
+## 5.9.2 web page in the server (for iPhone and any browser)
+- Bundled server is now `2.0.0-abdo15`: it serves a web page at `http://<PS4 IP>:6701/` (downloads, files with PKG install, server info; Arabic/English). Open it in Safari on an iPhone, or any browser. The app itself is unchanged apart from the bundled server.
+- The page cannot send the server to the PS4 the first time (browsers cannot open a raw connection to port 9090): send it once from this app or any payload sender. It has no trophies, captures, games or settings screens.
+- Tested in headless Chromium against the Linux test host only; NOT on a console, NOT on an iPhone. NOT compiled here (no Android SDK).
+
 # PS4 Download Monitor 5.9.1
 
 ## 5.9.1 full power-off + diagnostic server
