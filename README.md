@@ -1,3 +1,13 @@
+# PS4 Download Monitor 5.9.1
+
+## 5.9.1 full power-off + diagnostic server
+- **Settings > PS4 > "Turn off after downloads" > switch "Turn the PS4 off completely (not rest mode)":** when on, "Turn off now", the sleep timer and "Turn the PS4 off when the download finishes" send `poweroff.elf` (built from `payload`, bundled in the app) instead of `standby.elf`. Success = the console stops answering DDP twice in a row; if it goes to rest mode instead, the app says so.
+- **After a full power-off the app cannot turn the PS4 on again** (DDP wake works only from rest mode): press the console's power button. Downloads stop.
+- **NOT verified:** `poweroff.elf` calls `sceSystemStateMgrTurnOff` from libSceSystemStateMgr.sprx, and `standby.elf` calls `sceSystemStateMgrEnterStandby`. Both names and the module paths (three are tried) come from memory / the earlier standby source; I could not confirm them from documentation. If the function is missing the payload exits with code 2 and the app reports "still on". Both ELFs were linked here with the orbis toolchain but NEVER run on a console.
+- Bundled server is now `2.0.0-abdo14` (diagnostics only: `alive N s`, `CRASH signal N`, `exit:` and `5b`/`6` lines in `/data/ezremote_boot.log`; the loop no longer spins in rest mode).
+- Texts on some screens still say "rest mode" even when the full-off switch is on.
+- NOT compiled here (no Android SDK).
+
 # PS4 Download Monitor 5.9
 
 ## 5.9 turn the PS4 off when a download finishes

@@ -181,6 +181,7 @@ import kotlinx.coroutines.withContext
     var hasStandby by remember { mutableStateOf(Standby.available(ctx)) }
     var standbyMsg by remember { mutableStateOf("") }
     var standbyBusy by remember { mutableStateOf(false) }
+    var fullOff by remember { mutableStateOf(Standby.fullOff()) }
     val standbyPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri: android.net.Uri? ->
         if (uri != null) scope.launch {
             val err = withContext(Dispatchers.IO) { Standby.import(ctx, uri) }
@@ -240,12 +241,17 @@ import kotlinx.coroutines.withContext
             Text(tr("Turn off after downloads", "الإطفاء بعد التحميل"), fontWeight = FontWeight.SemiBold)
             Dim(tr("The download switch \"Turn the PS4 off when the download finishes\" sends a small payload (standby.elf) to GoldHEN's payload loader (port 9090), which puts the PS4 in rest mode. Turn on \"Enable PayLoader Server\" in GoldHEN's settings. Build standby.elf from payload/standby in the project.",
                 "مفتاح التحميل «إطفاء الـPS4 بعد انتهاء التحميل» يرسل payload صغيراً (standby.elf) إلى محمّل الـpayload في GoldHEN (المنفذ 9090) فيُدخل الـPS4 في وضع الراحة. فعّل «Enable PayLoader Server» في إعدادات GoldHEN. ابنِ standby.elf من المجلد payload/standby في المشروع."))
-            Text(if (hasStandby) tr("Standby payload: ready", "payload الإطفاء: جاهز") else tr("Standby payload: not chosen", "payload الإطفاء: غير مختار"), style = MaterialTheme.typography.bodyMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Switch(fullOff, { fullOff = it; Standby.setFullOff(it); hasStandby = Standby.available(ctx) })
+                Text(tr("Turn the PS4 off completely (not rest mode)", "أطفئ الـPS4 كليًا (وليس وضع الراحة)"), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            }
+            if (fullOff) Dim(tr("After a full power-off the PS4 cannot be woken from the app; press its power button. Downloads stop. Uses poweroff.elf, which calls sceSystemStateMgrTurnOff; that function name is NOT verified on a console.", "بعد الإطفاء الكلي لا يستطيع التطبيق إيقاظ الـPS4؛ اضغط زر الطاقة فيه. تتوقف التحميلات. يستعمل poweroff.elf الذي يستدعي sceSystemStateMgrTurnOff؛ اسم هذه الدالة لم يُتحقَّق منه على جهاز."))
+            Text(if (hasStandby) tr("Payload: ready", "الـpayload: جاهز") else tr("Payload: not available", "الـpayload: غير متوفر"), style = MaterialTheme.typography.bodyMedium)
             if (standbyMsg.isNotEmpty()) Text(standbyMsg, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { standbyPicker.launch(arrayOf("*/*")) }) { Lbl(tr("Choose standby.elf", "اختيار standby.elf")) }
                 OutlinedButton(enabled = hasStandby && host.isNotBlank() && !standbyBusy, onClick = {
-                    standbyBusy = true; standbyMsg = tr("Sending… the PS4 will go to rest mode if it works.", "جارٍ الإرسال… سيدخل الـPS4 وضع الراحة إن نجح.")
+                    standbyBusy = true; standbyMsg = if (fullOff) tr("Sending… the PS4 will turn off completely if it works.", "جارٍ الإرسال… سينطفئ الـPS4 كليًا إن نجح.") else tr("Sending… the PS4 will go to rest mode if it works.", "جارٍ الإرسال… سيدخل الـPS4 وضع الراحة إن نجح.")
                     scope.launch { standbyMsg = Standby.message(Standby.enter(ctx, host.trim())); standbyBusy = false }
                 }) { Lbl(tr("Test: turn off now", "تجربة: أطفئ الآن")) }
             }

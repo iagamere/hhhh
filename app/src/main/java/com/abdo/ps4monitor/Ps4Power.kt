@@ -87,9 +87,12 @@ object Ps4Power {
  */
 object Standby {
     fun file(ctx: Context) = File(ctx.filesDir, "standby.elf")
-    private fun bundled(ctx: Context): Boolean = try { ctx.assets.open("standby.elf").use { true } } catch (e: Exception) { false }
-    /** True when there is a payload to send (bundled in the app, or imported). */
-    fun available(ctx: Context): Boolean = bundled(ctx) || file(ctx).length() > 1024
+    private fun bundled(ctx: Context, name: String = "standby.elf"): Boolean = try { ctx.assets.open(name).use { true } } catch (e: Exception) { false }
+    /** true = fully power the console off (poweroff.elf, calls sceSystemStateMgrTurnOff); false = rest mode (standby.elf). Saved in the app. */
+    fun fullOff(): Boolean = try { Store.sp.getBoolean("power_full_off", false) } catch (e: Exception) { false }
+    fun setFullOff(on: Boolean) { try { Store.sp.edit().putBoolean("power_full_off", on).apply() } catch (e: Exception) { } }
+    /** True when there is a payload to send (bundled in the app, or imported for rest mode). */
+    fun available(ctx: Context, off: Boolean = fullOff()): Boolean = if (off) bundled(ctx, "poweroff.elf") else (bundled(ctx) || file(ctx).length() > 1024)
 
     /** Copies a chosen file into the app. Returns an error text, or null when saved. */
     fun import(ctx: Context, uri: Uri): String? {
@@ -102,33 +105,43 @@ object Standby {
         } catch (e: Exception) { return Ps4Api.friendly(e) }
     }
 
-    /** Sends the payload, then watches the console: success = it answers DDP with "rest mode" (or stops answering) within [waitMs]. Null = success, else a short reason. */
-    suspend fun enter(ctx: Context, host: String, waitMs: Long = 40_000L): String? = withContext(Dispatchers.IO) {
+    /** Sends the payload, then watches the console. Rest mode: success = DDP says "rest mode" (or the console stops answering) within [waitMs].
+     *  Full power-off: success = the console stops answering twice in a row. Null = success, else a short reason. */
+    suspend fun enter(ctx: Context, host: String, waitMs: Long = 40_000L, off: Boolean = fullOff()): String? = withContext(Dispatchers.IO) {
         if (host.isBlank()) return@withContext "no-host"
-        if (!available(ctx)) return@withContext "no-payload"
+        if (!available(ctx, off)) return@withContext "no-payload"
         val f = File(ctx.cacheDir, "standby-send.elf")
         try {
-            if (file(ctx).length() > 1024) file(ctx).copyTo(f, overwrite = true)
-            else ctx.assets.open("standby.elf").use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+            if (!off && file(ctx).length() > 1024) file(ctx).copyTo(f, overwrite = true)
+            else ctx.assets.open(if (off) "poweroff.elf" else "standby.elf").use { i -> f.outputStream().use { o -> i.copyTo(o) } }
         } catch (e: Exception) { return@withContext "payload-unreadable" }
         val err = ServerLoader.send(host, f) { }
         runCatching { f.delete() }
         if (err != null) return@withContext "send-failed: $err"
         val end = System.currentTimeMillis() + waitMs
+        var silent = 0; var sawRest = false
         while (System.currentTimeMillis() < end) {
             delay(2500)
             val pw = Ps4Power.probe(host, 800)
-            if (pw == Power.REST || pw == Power.OFF) return@withContext null
+            if (!off) { if (pw == Power.REST || pw == Power.OFF) return@withContext null }
+            else {
+                if (pw == Power.OFF) { silent++; if (silent >= 2) return@withContext null } else silent = 0
+                if (pw == Power.REST) sawRest = true
+            }
         }
-        "still-on"
+        if (off && sawRest) "rest-instead" else "still-on"
     }
 
-    fun message(err: String?): String = when {
-        err == null -> tr("The PS4 went to rest mode.", "دخل الـPS4 في وضع الراحة.")
-        err == "no-payload" -> tr("No standby payload in the app. Choose standby.elf in this PS4's settings.", "لا يوجد payload الإطفاء في التطبيق. اختر standby.elf من إعدادات هذا الـPS4.")
+    fun message(err: String?, off: Boolean = fullOff()): String = when {
+        err == null -> if (off) tr("The PS4 turned off completely. It can only be turned on again with its power button (the app cannot wake a fully off console).", "انطفأ الـPS4 كليًا. لا يُشغَّل إلا بزر الطاقة فيه (التطبيق لا يستطيع إيقاظ جهاز مطفأ كليًا).")
+                       else tr("The PS4 went to rest mode.", "دخل الـPS4 في وضع الراحة.")
+        err == "no-payload" -> if (off) tr("poweroff.elf is not inside this app.", "ملف poweroff.elf غير موجود داخل التطبيق.")
+                               else tr("No standby payload in the app. Choose standby.elf in this PS4's settings.", "لا يوجد payload الإطفاء في التطبيق. اختر standby.elf من إعدادات هذا الـPS4.")
         err == "no-host" -> tr("This PS4 has no IP address.", "لا يوجد عنوان IP لهذا الـPS4.")
-        err == "payload-unreadable" -> tr("Could not read the standby payload.", "تعذّرت قراءة payload الإطفاء.")
+        err == "payload-unreadable" -> tr("Could not read the payload.", "تعذّرت قراءة الـpayload.")
+        err == "rest-instead" -> tr("The PS4 went to rest mode, not fully off. This firmware may not support the full power-off call.", "دخل الـPS4 وضع الراحة ولم ينطفئ كليًا. قد لا يدعم هذا الإصدار استدعاء الإطفاء الكلي.")
         err.startsWith("send-failed") -> tr("Could not send the payload to the PS4 (GoldHEN's payload loader, port 9090, must be on): ", "تعذّر إرسال payload إلى الـPS4 (يجب تفعيل محمّل الـpayload في GoldHEN، المنفذ 9090): ") + err.removePrefix("send-failed: ")
-        else -> tr("The payload was sent but the PS4 is still on.", "أُرسل payload لكن الـPS4 ما زال يعمل.")
+        else -> if (off) tr("The payload was sent but the PS4 is still on. The function name in it was not verified on a console.", "أُرسل payload لكن الـPS4 ما زال يعمل. اسم الدالة فيه لم يُتحقَّق منه على جهاز.")
+                else tr("The payload was sent but the PS4 is still on.", "أُرسل payload لكن الـPS4 ما زال يعمل.")
     }
 }
